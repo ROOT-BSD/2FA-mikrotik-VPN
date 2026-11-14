@@ -1,4 +1,4 @@
-# VPN-GW 0.1
+# VPN-GW
 
 Версія: **0.1** (файл `VERSION`; історія змін — `CHANGELOG.md`).
 
