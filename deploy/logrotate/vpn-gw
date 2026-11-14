@@ -1,0 +1,10 @@
+# /etc/logrotate.d/vpn-gw  — retention per your КСЗІ policy (SIEM keeps its own copy)
+/var/lib/vpn-gw/logs/*.log {
+    daily
+    rotate 180
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 vpngw vpngw
+}
