@@ -1,153 +1,76 @@
-# VPN-GW 0.2
+# VPN-GW
+
+Портал двофакторного доступу до корпоративного VPN (L2TP/IPsec на MikroTik RouterOS 6 і 7).
 
 Версія: **0.2** (файл `VERSION`; історія змін — `CHANGELOG.md`).
 
-Портал двофакторного доступу до корпоративного VPN (L2TP/IPsec на MikroTik RouterOS 6 і 7).
-Після перевірки доменного пароля (Active Directory, LDAPS) і коду з Microsoft Authenticator (TOTP)
-портал додає публічну IP-адресу співробітника в `/ip firewall address-list` маршрутизаторів на 10 годин.
-VPN-порти відкриті лише для адрес з цього списку.
+## Що робить
 
-Панель адміністратора (`<APP_BASE_PATH>/admin`, лише з внутрішньої мережі) — налаштування MikroTik, пошти, AD і журналів з кнопками перевірки, перегляд журналу, шифровані резервні копії, оновлення завантаженням архіву.
+VPN-порти на маршрутизаторах закриті для всіх, крім адрес зі списку `Allowed_VPN_Users`. Щоб підключитися до VPN, співробітник:
 
-Документація (`doc/`):
-- `doc/QUICKSTART.md` — швидкий гайд: команди від щойно встановленого Debian до робочого порталу;
-- `doc/INSTALL_GUIDE.md` — від чистого сервера до запуску (Debian 13, `install.sh`, MikroTik, пілот, відкат);
-- `doc/ADMIN_GUIDE.md` — панель адміністратора: налаштування, журнали, резервні копії, оновлення;
-- `doc/DEVELOPMENT.md` — будова коду, модулі, рішення безпеки, тести;
-- `doc/USER_GUIDE.md` — інструкція для співробітника: реєстрація Microsoft Authenticator, налаштування VPN, щоденний вхід.
+1. відкриває портал у браузері й вводить доменний логін і пароль (Active Directory, LDAPS);
+2. вводить код з Microsoft Authenticator (TOTP);
+3. портал додає його публічну IP-адресу в address-list усіх маршрутизаторів на 10 годин;
+4. після цього VPN-клієнт підключається як звичайно.
+
+Доступ можна відкликати кнопкою: адреса видаляється, VPN-сесія розривається.
+
+## Можливості
+
+- **Перший фактор** — пароль Active Directory через LDAPS з перевіркою сертифіката; враховуються вкладені групи, вимкнені та протерміновані облікові записи.
+- **Другий фактор** — Microsoft Authenticator (TOTP); резервний код на робочу пошту (вимикається).
+- **Реєстрація автентифікатора** — лише з внутрішньої мережі, з підтвердженням першим кодом.
+- **MikroTik** — RouterOS 7 через REST API, RouterOS 6 через API-SSL; повторний вхід подовжує доступ без дублікатів.
+- **Захист від підбору** — ліміти спроб і блокування за IP та логіном, перевірка блокування до звернення в AD.
+- **Журнал аудиту** — JSON у файл, syslog і SIEM; паролі й коди не записуються.
+- **Сповіщення** — лист співробітнику про відкритий доступ.
+- **Панель адміністратора** (лише з внутрішньої мережі):
+  - налаштування MikroTik, пошти, AD і журналів з кнопками перевірки;
+  - перегляд журналу;
+  - шифровані резервні копії;
+  - оновлення завантаженням архіву з автоматичним відкатом.
+
+## Безпека
+
+- Неіснуючі й службові адреси відповідають 404; реєстрація і панель ззовні не видно.
+- Сесії: `__Host-` cookie, CSRF, прив'язка до IP, обмежений час кроків; CSP без JavaScript.
+- IP клієнта: `X-Forwarded-For` лише від довірених проксі; приймається тільки одна публічна IPv4.
+- До MikroTik — структуровані запити замість CLI-рядків, TLS з перевіркою сертифіката корпоративного CA.
+- Секрети TOTP і паролі з панелі зашифровані (libsodium).
+- Некоректна конфігурація зупиняє портал (fail closed); панель перевіряє налаштування до збереження.
+- Веб-процес не виконує системних команд; резервні копії й оновлення виконує окремий агент.
+
+## Технології
+
+PHP 8.2+ (Slim 4), Apache 2.4 + PHP-FPM, SQLite, Debian 12/13. Бібліотеки: otphp, endroid/qr-code, PHPMailer, Monolog, routeros-api-php, phpdotenv.
 
 ## Структура
 
 ```
-public/            webroot: index.php (front controller), assets/app.css
-src/
-  Config.php       .env + значення з панелі, валідація (fail closed)
-  Container.php    сервіси (lazy)
-  App.php          маршрути Slim 4, middleware, обробка помилок (усе невідоме -> 404)
-  Auth/            LdapAuthenticator, TotpService (MS Authenticator), EmailOtp
-  Security/        ClientIp, Cidr, Crypto (sodium), RateLimiter (серверний)
-  RouterOs/        RestClientV7 (REST), ApiSslClientV6 (API-SSL), AccessGranter
-  Http/            контролери, Session, View, middleware (CSRF, заголовки, лише внутрішня мережа)
-  Http/Admin/      панель адміністратора
-  Admin/           AdminAuth, Jobs (черга агента), LogReader, Diagnostics
-  Settings/        SettingsSchema, SettingsStore (шифровані секрети в БД)
-  Agent/           агент від root: резервні копії (BackupArchive), оновлення (ReleaseInspector)
-  Storage/         SQLite + міграції
-  Log/             AuditLogger (JSON -> файл, syslog, віддалений syslog; категорії подій)
-  Mail/            Notifier (PHPMailer, STARTTLS з перевіркою сертифіката)
-templates/         сторінки (весь вивід екранується)
-bin/               migrate, cleanup, unlock, totp-reset, mt-check, admin, settings, agent, agent-helper, restore
-deploy/            Apache vhost, PHP-FPM pool, systemd (cleanup, agent), logrotate, nftables, скрипти RouterOS 6/7
-install.sh         автоматичне встановлення з перевіркою залежностей
-doc/              QUICKSTART, INSTALL_GUIDE, ADMIN_GUIDE, DEVELOPMENT, USER_GUIDE
-tests/             PHPUnit 11 (unit + наскрізні HTTP-сценарії з фейковими AD і MikroTik)
+src/          код застосунку (Auth, Security, RouterOs, Http, Admin, Settings, Agent, Storage, Log, Mail)
+templates/    сторінки порталу і панелі
+public/       webroot: index.php, стилі
+bin/          службові утиліти
+deploy/       конфігурації Apache, PHP-FPM, systemd, logrotate, nftables, скрипти RouterOS 6/7
+tests/        автоматичні тести (PHPUnit)
+doc/          документація
+install.sh    встановлення
 ```
 
-## Маршрути (під `APP_BASE_PATH`, напр. `/k7f3x`)
+## Документація
 
-| Метод | Шлях | Призначення |
-|---|---|---|
-| GET | `/` | Форма логіна |
-| POST | `/login` | Крок 1: AD |
-| GET/POST | `/verify` | Крок 2: код TOTP (або Email OTP) → запис у MikroTik |
-| POST | `/verify/email` | Резервний код на пошту (якщо `EMAIL_OTP_ENABLED=true`) |
-| GET | `/result` | «Доступ дозволено до ЧЧ:ХХ» |
-| POST | `/revoke` | Відкликати доступ (запис + PPP-сесія + IPsec peer) |
-| GET/POST | `/enroll` | Реєстрація Microsoft Authenticator — **лише з `INTERNAL_NETWORKS`**, ззовні 404 |
-| GET/POST | `/admin/…` | Панель адміністратора — **лише з `INTERNAL_NETWORKS`**, ззовні 404 |
+| Документ | Для кого |
+|---|---|
+| `doc/QUICKSTART` | швидке встановлення на новий сервер |
+| `doc/INSTALL_GUIDE` | повна інструкція: встановлення, MikroTik, пілот, експлуатація |
+| `doc/ADMIN_GUIDE` | робота в панелі адміністратора |
+| `doc/DEVELOPMENT` | будова коду і рішення безпеки |
+| `doc/USER_GUIDE` | інструкція для співробітника |
 
-## Автоматичне встановлення: `install.sh`
+Кожен документ є у форматах `.md` і `.docx`.
 
-На чистому Debian 13 (або 12) з налаштованими мережею, DNS і синхронізацією часу:
+## Обмеження
 
-```bash
-sudo ./install.sh --check                              # лише перевірки, нічого не змінює
-sudo ./install.sh --domain vpn-gw.company.ua           # встановлення / оновлення; створює адміністратора панелі
-# далі: https://vpn-gw.company.ua/<APP_BASE_PATH>/admin -> AD, Пошта, MikroTik -> «Перевірити»
-```
-
-Що робить скрипт (11 кроків, підсумок OK/WARN/FAIL; код виходу 0 — OK, 1 — є FAIL, 2 — перервано):
-
-1. ОС, архітектура, диск, пам'ять, **синхронізація часу** (без неї TOTP не працює).
-2. Ставить відсутні пакети (Apache, PHP-FPM з потрібними модулями, Composer, chrony, утиліти); видаляє `mod_php`, якщо є.
-3. Перевіряє версію PHP (≥ 8.2) і всі розширення: ldap, curl, sodium, pdo_sqlite, mbstring, openssl, sockets тощо.
-4. Модулі Apache (`mpm_event`, `proxy_fcgi`, `rewrite`, `headers`, `ssl`…), `ServerTokens Prod`, вимикає стандартні сайти.
-5. Користувач `vpngw`, каталоги застосунку і агента з правильними правами.
-6. Копіює код у `/srv/vpn-gw`, `composer install --no-dev`, `composer audit`; код — власність `root:vpngw`.
-7. `.env`: якщо немає — створює з **новими ключами** і випадковим шляхом порталу; перевіряє права 600, файли CA, незаповнені значення і проганяє `Config::load`.
-8. Міграція БД; перший адміністратор панелі (`--admin-user`, пароль запитується або генерується); пароль резервних копій.
-9. Пул PHP-FPM, віртуальний хост (домен і шлях підставляються з `.env`; без сертифіката — тимчасово самопідписаний), systemd-таймер, агент `vpn-gw-agent`, logrotate; `--with-nftables` — також firewall сервера.
-10. **Зв'язок**: TLS і довіра до сертифіката для кожного контролера домену (LDAPS), кожного MikroTik з `ROUTERS`, SMTP STARTTLS; DNS (і попередження про AAAA-запис).
-11. Smoke-тест: `/` і `/index.php` → 404, шлях порталу → 200, версія Apache прихована.
-
-Скрипт ідемпотентний: наявні `.env`, база, адміністратори й сертифікати не перезаписуються. Маршрутизатори він **не змінює** — `.rsc`-скрипти з `deploy/mikrotik/` застосовуються вручну в Safe Mode.
-
-## Встановлення вручну (коротко; повністю — INSTALL_GUIDE.md)
-
-```bash
-sudo apt install apache2 php8.4-fpm php8.4-cli php8.4-ldap php8.4-curl php8.4-sqlite3 \
-                 php8.4-mbstring php8.4-xml php8.4-intl php8.4-opcache composer
-cd /srv/vpn-gw
-sudo -u vpngw composer install --no-dev --classmap-authoritative
-cp .env.example .env && chmod 600 .env      # заповнити; ключі:
-php -r 'echo "base64:".base64_encode(random_bytes(32)).PHP_EOL;'
-sudo -u vpngw php bin/migrate.php
-# deploy/apache/vpn-gw.conf -> /etc/apache2/sites-available/, a2ensite vpn-gw
-# deploy/php-fpm/vpngw.conf -> /etc/php/8.4/fpm/pool.d/
-# deploy/systemd/* -> /etc/systemd/system/, systemctl enable --now vpn-gw-cleanup.timer
-# deploy/mikrotik/routeros{6,7}.rsc — на маршрутизаторах у Safe Mode
-```
-
-> `composer.lock` не включено: залежності вперше розв'язуються на сервері (`composer install`
-> створить lock-файл). Закомітьте його, щоб наступні розгортання були відтворюваними.
-
-## Перевірка
-
-```bash
-composer install            # з dev-залежностями, на машині розробника
-composer test               # PHPUnit
-composer stan               # PHPStan, рівень 8
-composer audit
-```
-
-Інтеграція з маршрутизаторами (на тестовому стенді або з тестовою IP):
-
-```bash
-sudo -u vpngw php bin/mt-check.php grant  198.51.100.99
-sudo -u vpngw php bin/mt-check.php find   198.51.100.99
-sudo -u vpngw php bin/mt-check.php revoke 198.51.100.99
-```
-
-## Адміністрування
-
-Основне — у панелі (`doc/ADMIN_GUIDE.md`). З командного рядка:
-
-```bash
-sudo -u vpngw php bin/admin.php list | create <логін> | passwd <логін> | delete <логін>
-sudo -u vpngw php bin/settings.php list | reset <KEY>
-sudo php bin/agent.php backup
-sudo php bin/restore.php /var/backups/vpn-gw/<файл>.vgbk [--apply]
-sudo -u vpngw php bin/unlock.php --user ivanenko --by admin.petrenko
-sudo -u vpngw php bin/unlock.php --ip 203.0.113.45 --by admin.petrenko
-sudo -u vpngw php bin/totp-reset.php --user ivanenko --by admin.petrenko   # втрачений телефон
-sudo -u vpngw php bin/totp-reset.php --count
-```
-
-## Ключові рішення безпеки
-
-- **IP клієнта**: `X-Forwarded-For` лише від `TRUSTED_PROXIES`, береться крайнє праве значення; приймається тільки одна публічна IPv4 (CIDR, приватні, IPv6 — відмова). Apache видаляє клієнтський XFF.
-- **MikroTik**: жодних CLI-рядків; REST (JSON) або API-слова, де кожне значення — окреме поле. TLS до маршрутизатора з перевіркою сертифіката корпоративного CA. Для RouterOS 6 явно вимкнено анонімні шифри (ADH), які бібліотека використовує за замовчуванням.
-- **AD**: лише `ldaps://` з перевіркою сертифіката; порожній пароль відхиляється до bind; група з урахуванням вкладених груп; вимкнені та протерміновані облікові записи — відмова.
-- **TOTP**: секрет 160 біт, зашифрований (sodium secretbox, `APP_KEY`); кожен крок часу приймається один раз (атомарний `last_step`); реєстрація лише з внутрішньої мережі та лише з підтвердженням першим кодом.
-- **Ліміти**: у SQLite, а не в сесії; блокування логіна перевіряється **до** звернення в AD (захист від lockout облікових записів).
-- **Сесія**: `__Host-` cookie, Secure, HttpOnly, SameSite=Strict, нова ID після кожного кроку, прив'язка до IP, TTL кроків.
-- **Журнал**: JSON, ключі з `pass|code|secret|otp|token|csrf|session` автоматично відкидаються.
-- **Збій конфігурації**: портал не стартує (500) замість роботи з небезпечними налаштуваннями; панель перевіряє всю конфігурацію до збереження.
-- **Панель**: лише з `INTERNAL_NETWORKS`, локальні облікові записи (Argon2id), ліміт спроб, сесія з прив'язкою до IP; параметри доступу (`INTERNAL_NETWORKS`, ключі, шлях) з панелі не змінюються.
-- **Привілеї**: PHP-FPM без `exec/proc_open`; копії й оновлення виконує агент від root через чергу завдань (недовірені дані, фіксовані дії); код належить root.
-
-## Відомі обмеження
-
-- Видалення запису зі списку не рве вже встановлений тунель; тому `revoke` додатково видаляє активну PPP-сесію та IPsec active-peer.
-- Якщо один з маршрутизаторів недоступний, на інших запис уже може бути зроблено (він обмежений timeout); користувач бачить «Тимчасова помилка», подія `mt_error` — у журналі.
-- Лише IPv4 (публікуйте портал тільки A-записом).
+- Лише IPv4.
+- Android 12+ не має вбудованого клієнта L2TP/IPsec.
+- Якщо один з маршрутизаторів недоступний, на інших запис уже може бути зроблено (обмежений часом доступу).
