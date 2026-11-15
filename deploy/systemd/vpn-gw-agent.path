@@ -1,0 +1,9 @@
+[Unit]
+Description=VPN-GW agent: start when the admin panel queues a job
+
+[Path]
+PathExistsGlob=/var/lib/vpn-gw/spool/*.job
+Unit=vpn-gw-agent.service
+
+[Install]
+WantedBy=paths.target

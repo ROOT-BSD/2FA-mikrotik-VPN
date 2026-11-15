@@ -1,34 +1,45 @@
-# VPN-GW
+# VPN-GW 0.2
 
-Версія: **0.1** (файл `VERSION`; історія змін — `CHANGELOG.md`).
+Версія: **0.2** (файл `VERSION`; історія змін — `CHANGELOG.md`).
 
 Портал двофакторного доступу до корпоративного VPN (L2TP/IPsec на MikroTik RouterOS 6 і 7).
 Після перевірки доменного пароля (Active Directory, LDAPS) і коду з Microsoft Authenticator (TOTP)
 портал додає публічну IP-адресу співробітника в `/ip firewall address-list` маршрутизаторів на 10 годин.
 VPN-порти відкриті лише для адрес з цього списку.
 
-Документація: `DEVELOPMENT.md` (технічне завдання), `INSTALL_GUIDE.md` (встановлення з нуля),
-`VPN-GW_Як_це_працює.docx` (для користувачів).
+Панель адміністратора (`<APP_BASE_PATH>/admin`, лише з внутрішньої мережі) — налаштування MikroTik, пошти, AD і журналів з кнопками перевірки, перегляд журналу, шифровані резервні копії, оновлення завантаженням архіву.
+
+Документація (`doc/`):
+- `doc/QUICKSTART.md` — швидкий гайд: команди від щойно встановленого Debian до робочого порталу;
+- `doc/INSTALL_GUIDE.md` — від чистого сервера до запуску (Debian 13, `install.sh`, MikroTik, пілот, відкат);
+- `doc/ADMIN_GUIDE.md` — панель адміністратора: налаштування, журнали, резервні копії, оновлення;
+- `doc/DEVELOPMENT.md` — будова коду, модулі, рішення безпеки, тести;
+- `doc/USER_GUIDE.md` — інструкція для співробітника: реєстрація Microsoft Authenticator, налаштування VPN, щоденний вхід.
 
 ## Структура
 
 ```
 public/            webroot: index.php (front controller), assets/app.css
 src/
-  Config.php       валідація .env (fail closed)
+  Config.php       .env + значення з панелі, валідація (fail closed)
   Container.php    сервіси (lazy)
   App.php          маршрути Slim 4, middleware, обробка помилок (усе невідоме -> 404)
   Auth/            LdapAuthenticator, TotpService (MS Authenticator), EmailOtp
   Security/        ClientIp, Cidr, Crypto (sodium), RateLimiter (серверний)
   RouterOs/        RestClientV7 (REST), ApiSslClientV6 (API-SSL), AccessGranter
   Http/            контролери, Session, View, middleware (CSRF, заголовки, лише внутрішня мережа)
+  Http/Admin/      панель адміністратора
+  Admin/           AdminAuth, Jobs (черга агента), LogReader, Diagnostics
+  Settings/        SettingsSchema, SettingsStore (шифровані секрети в БД)
+  Agent/           агент від root: резервні копії (BackupArchive), оновлення (ReleaseInspector)
   Storage/         SQLite + міграції
-  Log/             AuditLogger (JSON -> файл + syslog LOCAL5 -> SIEM)
+  Log/             AuditLogger (JSON -> файл, syslog, віддалений syslog; категорії подій)
   Mail/            Notifier (PHPMailer, STARTTLS з перевіркою сертифіката)
 templates/         сторінки (весь вивід екранується)
-bin/               migrate, cleanup, unlock, totp-reset, mt-check
-deploy/            Apache vhost, PHP-FPM pool, systemd timer, logrotate, nftables, скрипти RouterOS 6/7
+bin/               migrate, cleanup, unlock, totp-reset, mt-check, admin, settings, agent, agent-helper, restore
+deploy/            Apache vhost, PHP-FPM pool, systemd (cleanup, agent), logrotate, nftables, скрипти RouterOS 6/7
 install.sh         автоматичне встановлення з перевіркою залежностей
+doc/              QUICKSTART, INSTALL_GUIDE, ADMIN_GUIDE, DEVELOPMENT, USER_GUIDE
 tests/             PHPUnit 11 (unit + наскрізні HTTP-сценарії з фейковими AD і MikroTik)
 ```
 
@@ -43,6 +54,7 @@ tests/             PHPUnit 11 (unit + наскрізні HTTP-сценарії �
 | GET | `/result` | «Доступ дозволено до ЧЧ:ХХ» |
 | POST | `/revoke` | Відкликати доступ (запис + PPP-сесія + IPsec peer) |
 | GET/POST | `/enroll` | Реєстрація Microsoft Authenticator — **лише з `INTERNAL_NETWORKS`**, ззовні 404 |
+| GET/POST | `/admin/…` | Панель адміністратора — **лише з `INTERNAL_NETWORKS`**, ззовні 404 |
 
 ## Автоматичне встановлення: `install.sh`
 
@@ -50,26 +62,25 @@ tests/             PHPUnit 11 (unit + наскрізні HTTP-сценарії �
 
 ```bash
 sudo ./install.sh --check                              # лише перевірки, нічого не змінює
-sudo ./install.sh --domain vpn-gw.company.ua           # встановлення / оновлення
-sudo -u vpngw nano /srv/vpn-gw/.env                    # заповнити AD, MikroTik, SMTP
-sudo ./install.sh --domain vpn-gw.company.ua           # повторний запуск: міграція БД і перевірки
+sudo ./install.sh --domain vpn-gw.company.ua           # встановлення / оновлення; створює адміністратора панелі
+# далі: https://vpn-gw.company.ua/<APP_BASE_PATH>/admin -> AD, Пошта, MikroTik -> «Перевірити»
 ```
 
-Що робить скрипт (11 кроків, підсумок OK/WARN/FAIL, код виходу 1 при будь-якому FAIL):
+Що робить скрипт (11 кроків, підсумок OK/WARN/FAIL; код виходу 0 — OK, 1 — є FAIL, 2 — перервано):
 
 1. ОС, архітектура, диск, пам'ять, **синхронізація часу** (без неї TOTP не працює).
 2. Ставить відсутні пакети (Apache, PHP-FPM з потрібними модулями, Composer, chrony, утиліти); видаляє `mod_php`, якщо є.
 3. Перевіряє версію PHP (≥ 8.2) і всі розширення: ldap, curl, sodium, pdo_sqlite, mbstring, openssl, sockets тощо.
 4. Модулі Apache (`mpm_event`, `proxy_fcgi`, `rewrite`, `headers`, `ssl`…), `ServerTokens Prod`, вимикає стандартні сайти.
-5. Користувач `vpngw`, каталоги з правильними правами.
-6. Копіює код у `/srv/vpn-gw`, `composer install --no-dev`, `composer audit`.
+5. Користувач `vpngw`, каталоги застосунку і агента з правильними правами.
+6. Копіює код у `/srv/vpn-gw`, `composer install --no-dev`, `composer audit`; код — власність `root:vpngw`.
 7. `.env`: якщо немає — створює з **новими ключами** і випадковим шляхом порталу; перевіряє права 600, файли CA, незаповнені значення і проганяє `Config::load`.
-8. Міграція БД (лише коли `.env` заповнено).
-9. Пул PHP-FPM, віртуальний хост (домен і шлях підставляються з `.env`; без сертифіката — тимчасово самопідписаний), systemd-таймер, logrotate; `--with-nftables` — також firewall сервера.
+8. Міграція БД; перший адміністратор панелі (`--admin-user`, пароль запитується або генерується); пароль резервних копій.
+9. Пул PHP-FPM, віртуальний хост (домен і шлях підставляються з `.env`; без сертифіката — тимчасово самопідписаний), systemd-таймер, агент `vpn-gw-agent`, logrotate; `--with-nftables` — також firewall сервера.
 10. **Зв'язок**: TLS і довіра до сертифіката для кожного контролера домену (LDAPS), кожного MikroTik з `ROUTERS`, SMTP STARTTLS; DNS (і попередження про AAAA-запис).
 11. Smoke-тест: `/` і `/index.php` → 404, шлях порталу → 200, версія Apache прихована.
 
-Скрипт ідемпотентний: наявні `.env`, база й сертифікати не перезаписуються. Маршрутизатори він **не змінює** — `.rsc`-скрипти з `deploy/mikrotik/` застосовуються вручну в Safe Mode.
+Скрипт ідемпотентний: наявні `.env`, база, адміністратори й сертифікати не перезаписуються. Маршрутизатори він **не змінює** — `.rsc`-скрипти з `deploy/mikrotik/` застосовуються вручну в Safe Mode.
 
 ## Встановлення вручну (коротко; повністю — INSTALL_GUIDE.md)
 
@@ -109,7 +120,13 @@ sudo -u vpngw php bin/mt-check.php revoke 198.51.100.99
 
 ## Адміністрування
 
+Основне — у панелі (`doc/ADMIN_GUIDE.md`). З командного рядка:
+
 ```bash
+sudo -u vpngw php bin/admin.php list | create <логін> | passwd <логін> | delete <логін>
+sudo -u vpngw php bin/settings.php list | reset <KEY>
+sudo php bin/agent.php backup
+sudo php bin/restore.php /var/backups/vpn-gw/<файл>.vgbk [--apply]
 sudo -u vpngw php bin/unlock.php --user ivanenko --by admin.petrenko
 sudo -u vpngw php bin/unlock.php --ip 203.0.113.45 --by admin.petrenko
 sudo -u vpngw php bin/totp-reset.php --user ivanenko --by admin.petrenko   # втрачений телефон
@@ -125,7 +142,9 @@ sudo -u vpngw php bin/totp-reset.php --count
 - **Ліміти**: у SQLite, а не в сесії; блокування логіна перевіряється **до** звернення в AD (захист від lockout облікових записів).
 - **Сесія**: `__Host-` cookie, Secure, HttpOnly, SameSite=Strict, нова ID після кожного кроку, прив'язка до IP, TTL кроків.
 - **Журнал**: JSON, ключі з `pass|code|secret|otp|token|csrf|session` автоматично відкидаються.
-- **Збій конфігурації**: портал не стартує (500) замість роботи з небезпечними налаштуваннями.
+- **Збій конфігурації**: портал не стартує (500) замість роботи з небезпечними налаштуваннями; панель перевіряє всю конфігурацію до збереження.
+- **Панель**: лише з `INTERNAL_NETWORKS`, локальні облікові записи (Argon2id), ліміт спроб, сесія з прив'язкою до IP; параметри доступу (`INTERNAL_NETWORKS`, ключі, шлях) з панелі не змінюються.
+- **Привілеї**: PHP-FPM без `exec/proc_open`; копії й оновлення виконує агент від root через чергу завдань (недовірені дані, фіксовані дії); код належить root.
 
 ## Відомі обмеження
 

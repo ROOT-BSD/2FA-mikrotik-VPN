@@ -7,10 +7,19 @@ namespace VpnGw;
 use Psr\Clock\ClockInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Slim\Psr7\Factory\ResponseFactory;
+use VpnGw\Admin\AdminAuth;
+use VpnGw\Admin\Diagnostics;
+use VpnGw\Admin\Jobs;
+use VpnGw\Admin\LogReader;
 use VpnGw\Auth\Authenticator;
 use VpnGw\Auth\EmailOtp;
 use VpnGw\Auth\LdapAuthenticator;
 use VpnGw\Auth\TotpService;
+use VpnGw\Http\Admin\AuthController as AdminAuthController;
+use VpnGw\Http\Admin\DashboardController;
+use VpnGw\Http\Admin\LogsController;
+use VpnGw\Http\Admin\MaintenanceController;
+use VpnGw\Http\Admin\SettingsController;
 use VpnGw\Http\EnrollController;
 use VpnGw\Http\LoginController;
 use VpnGw\Http\MfaController;
@@ -22,6 +31,7 @@ use VpnGw\Mail\Notifier;
 use VpnGw\RouterOs\AccessGranter;
 use VpnGw\Security\Crypto;
 use VpnGw\Security\RateLimiter;
+use VpnGw\Settings\SettingsStore;
 use VpnGw\Storage\Database;
 use VpnGw\Support\SystemClock;
 
@@ -70,7 +80,7 @@ final class Container
 
     public function audit(): AuditLogger
     {
-        return $this->get(__FUNCTION__, fn () => AuditLogger::create($this->cfg->get('LOG_PATH')), AuditLogger::class);
+        return $this->get(__FUNCTION__, fn () => AuditLogger::fromConfig($this->cfg), AuditLogger::class);
     }
 
     public function authenticator(): Authenticator
@@ -148,6 +158,72 @@ final class Container
             $this->cfg, $this->session, $this->view(), $this->clock(),
             $this->authenticator(), $this->totp(), $this->rateLimiter(), $this->audit(),
         ), EnrollController::class);
+    }
+
+    // ---- admin panel ------------------------------------------------------------
+
+    public function adminAuth(): AdminAuth
+    {
+        return $this->get(__FUNCTION__, fn () => new AdminAuth($this->db(), $this->clock()), AdminAuth::class);
+    }
+
+    public function settingsStore(): SettingsStore
+    {
+        return $this->get(__FUNCTION__, fn () => new SettingsStore($this->db(), $this->crypto()), SettingsStore::class);
+    }
+
+    public function jobs(): Jobs
+    {
+        return $this->get(__FUNCTION__, fn () => new Jobs(
+            $this->cfg->get('DATA_DIR') . '/spool',
+            $this->cfg->get('AGENT_DIR') . '/status',
+            $this->cfg->get('BACKUP_DIR'),
+        ), Jobs::class);
+    }
+
+    public function logReader(): LogReader
+    {
+        return $this->get(__FUNCTION__, fn () => new LogReader($this->cfg->get('LOG_PATH')), LogReader::class);
+    }
+
+    public function diagnostics(): Diagnostics
+    {
+        return $this->get(__FUNCTION__, fn () => new Diagnostics($this->cfg, $this->authenticator(), $this->notifier()), Diagnostics::class);
+    }
+
+    public function adminAuthController(): AdminAuthController
+    {
+        return $this->get(__FUNCTION__, fn () => new AdminAuthController(
+            $this->cfg, $this->session, $this->view(), $this->clock(), $this->audit(), $this->adminAuth(), $this->rateLimiter(),
+        ), AdminAuthController::class);
+    }
+
+    public function dashboardController(): DashboardController
+    {
+        return $this->get(__FUNCTION__, fn () => new DashboardController(
+            $this->cfg, $this->session, $this->view(), $this->clock(), $this->audit(), $this->db(), $this->jobs(),
+        ), DashboardController::class);
+    }
+
+    public function settingsController(): SettingsController
+    {
+        return $this->get(__FUNCTION__, fn () => new SettingsController(
+            $this->cfg, $this->session, $this->view(), $this->clock(), $this->audit(), $this->settingsStore(), $this->diagnostics(),
+        ), SettingsController::class);
+    }
+
+    public function logsController(): LogsController
+    {
+        return $this->get(__FUNCTION__, fn () => new LogsController(
+            $this->cfg, $this->session, $this->view(), $this->clock(), $this->audit(), $this->logReader(),
+        ), LogsController::class);
+    }
+
+    public function maintenanceController(): MaintenanceController
+    {
+        return $this->get(__FUNCTION__, fn () => new MaintenanceController(
+            $this->cfg, $this->session, $this->view(), $this->clock(), $this->audit(), $this->jobs(),
+        ), MaintenanceController::class);
     }
 
     /**

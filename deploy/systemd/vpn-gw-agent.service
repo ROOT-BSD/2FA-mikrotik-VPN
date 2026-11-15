@@ -1,0 +1,15 @@
+[Unit]
+Description=VPN-GW agent: backups, web updates, log rotation settings (runs as root)
+Documentation=file:///srv/vpn-gw/doc/ADMIN_GUIDE.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Root is required: the agent reads TLS keys for backups and runs install.sh for updates.
+# It only executes fixed actions; job files from the web are validated as untrusted input.
+User=root
+ExecStart=/usr/bin/php /srv/vpn-gw/bin/agent.php run
+TimeoutStartSec=1800
+Nice=5
+PrivateTmp=yes
+UMask=0077

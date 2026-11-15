@@ -29,6 +29,11 @@ final class App
         $mfa = $c->mfaController(...);
         $result = $c->resultController(...);
         $enroll = $c->enrollController(...);
+        $adminAuth = $c->adminAuthController(...);
+        $dashboard = $c->dashboardController(...);
+        $settings = $c->settingsController(...);
+        $logs = $c->logsController(...);
+        $maint = $c->maintenanceController(...);
 
         $app->get('/', fn ($rq, $rs) => $login()->show($rq, $rs));
         $app->post('/login', fn ($rq, $rs) => $login()->submit($rq, $rs));
@@ -39,10 +44,23 @@ final class App
         $app->post('/revoke', fn ($rq, $rs) => $result()->revoke($rq, $rs));
         $app->map(['GET', 'POST'], '/enroll', fn ($rq, $rs) => $enroll()->handle($rq, $rs));
 
+        // Admin panel: internal networks only (middleware below) + local administrator login.
+        $app->get('/admin', fn ($rq, $rs) => $dashboard()->show($rq, $rs));
+        $app->get('/admin/login', fn ($rq, $rs) => $adminAuth()->form($rq, $rs));
+        $app->post('/admin/login', fn ($rq, $rs) => $adminAuth()->login($rq, $rs));
+        $app->post('/admin/logout', fn ($rq, $rs) => $adminAuth()->logout($rq, $rs));
+        $app->map(['GET', 'POST'], '/admin/password', fn ($rq, $rs) => $adminAuth()->password($rq, $rs));
+        $app->map(['GET', 'POST'], '/admin/settings/{section:[a-z]+}', fn ($rq, $rs, array $a) => $settings()->handle($rq, $rs, (string) $a['section']));
+        $app->get('/admin/logs', fn ($rq, $rs) => $logs()->show($rq, $rs));
+        $app->map(['GET', 'POST'], '/admin/backups', fn ($rq, $rs) => $maint()->backups($rq, $rs));
+        $app->get('/admin/backups/{name:[A-Za-z0-9._-]+}', fn ($rq, $rs, array $a) => $maint()->download($rq, $rs, (string) $a['name']));
+        $app->map(['GET', 'POST'], '/admin/update', fn ($rq, $rs) => $maint()->update($rq, $rs));
+        $app->get('/admin/jobs/{id:[0-9a-f-]+}', fn ($rq, $rs, array $a) => $maint()->job($rq, $rs, (string) $a['id']));
+
         // Slim runs middleware LIFO (last added = outermost). Effective order per request:
-        // error handler -> audit context -> security headers -> routing (404) -> internal-only /enroll -> CSRF -> route.
+        // error handler -> audit context -> security headers -> routing (404) -> internal-only /enroll and /admin -> CSRF -> route.
         $app->add(new Csrf($c->session(), $factory));
-        $app->add(new InternalNetworkOnly($cfg->list('INTERNAL_NETWORKS'), $factory, $cfg->basePath() . '/enroll'));
+        $app->add(new InternalNetworkOnly($cfg->list('INTERNAL_NETWORKS'), $factory, [$cfg->basePath() . '/enroll', $cfg->basePath() . '/admin']));
         $app->addRoutingMiddleware();
         $app->add(new SecurityHeaders());
         $app->add(function (ServerRequestInterface $request, $handler) use ($c): ResponseInterface {

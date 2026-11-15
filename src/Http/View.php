@@ -31,8 +31,9 @@ final class View
             'base' => $this->basePath,
             'e' => static fn (mixed $v): string => htmlspecialchars((string) (is_scalar($v) ? $v : ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
         ];
+        $layout = is_string($vars['layout'] ?? null) && preg_match('/^[a-z_]+$/', $vars['layout']) ? $vars['layout'] : 'layout';
         $content = $this->capture($this->dir . '/' . $template . '.php', $vars);
-        $page = $this->capture($this->dir . '/layout.php', $vars + ['content' => $content]);
+        $page = $this->capture($this->dir . '/' . $layout . '.php', $vars + ['content' => $content]);
 
         $response->getBody()->write($page);
         return $response

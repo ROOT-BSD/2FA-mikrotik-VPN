@@ -9,9 +9,9 @@ namespace VpnGw;
  * root; this constant must match it (enforced by VersionTest).
  *
  * The version is written to the audit log and shown by CLI tools, but is deliberately
- * NOT exposed in HTTP responses (no fingerprinting of the public portal).
+ * NOT exposed on public pages (no fingerprinting); only the internal admin panel shows it.
  */
 final class Version
 {
-    public const CURRENT = '0.1';
+    public const CURRENT = '0.2';
 }
