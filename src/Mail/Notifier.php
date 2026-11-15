@@ -40,12 +40,38 @@ final class Notifier
         return $this->send($to, 'Код підтвердження VPN-GW', $body, $username);
     }
 
+    /** Test message from the admin panel. Returns null on success or the SMTP error. */
+    public function test(string $to, string $admin): ?string
+    {
+        if (!$this->enabled()) {
+            return 'Пошту вимкнено: не задано SMTP-сервер або адресу відправника.';
+        }
+        if (filter_var($to, FILTER_VALIDATE_EMAIL) === false) {
+            return 'Некоректна адреса отримувача.';
+        }
+        $error = $this->deliver($to, 'Тестовий лист VPN-GW', "Це тестовий лист з панелі адміністратора VPN-GW.\nНадіслав: {$admin}.\n\nЯкщо ви його отримали — пошту налаштовано правильно.");
+        $this->audit->event($error === null ? 'mail_sent' : 'mail_error', $admin, null, ['subject' => 'test'] + ($error === null ? [] : ['error' => $error]));
+        return $error;
+    }
+
     private function send(?string $to, string $subject, string $body, string $username): bool
     {
         if (!$this->enabled() || $to === null || filter_var($to, FILTER_VALIDATE_EMAIL) === false) {
             $this->audit->event('mail_skipped', $username, null, ['subject' => $subject]);
             return false;
         }
+        $error = $this->deliver($to, $subject, $body);
+        if ($error === null) {
+            $this->audit->event('mail_sent', $username, null, ['subject' => $subject]);
+            return true;
+        }
+        $this->audit->event('mail_error', $username, null, ['error' => $error]);
+        return false;
+    }
+
+    /** @return string|null error message, null when the message was accepted by the server */
+    private function deliver(string $to, string $subject, string $body): ?string
+    {
         $mail = new PHPMailer(true);
         try {
             $mail->isSMTP();
@@ -71,11 +97,9 @@ final class Notifier
             $mail->Body = $body;
             $mail->isHTML(false);
             $mail->send();
-            $this->audit->event('mail_sent', $username, null, ['subject' => $subject]);
-            return true;
+            return null;
         } catch (MailException $e) {
-            $this->audit->event('mail_error', $username, null, ['error' => $mail->ErrorInfo !== '' ? $mail->ErrorInfo : $e->getMessage()]);
-            return false;
+            return $mail->ErrorInfo !== '' ? $mail->ErrorInfo : $e->getMessage();
         }
     }
 }

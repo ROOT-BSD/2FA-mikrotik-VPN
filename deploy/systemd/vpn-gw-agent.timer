@@ -1,0 +1,11 @@
+[Unit]
+Description=VPN-GW agent: hourly checks (scheduled backup, log rotation settings)
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+Unit=vpn-gw-agent.service
+
+[Install]
+WantedBy=timers.target

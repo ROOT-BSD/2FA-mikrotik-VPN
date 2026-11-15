@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Lifts a lockout.
+ * Lifts a lockout (for --ip also the admin-panel lockout of that address).
  *   sudo -u vpngw php bin/unlock.php --ip 203.0.113.45 --by admin.petrenko
  *   sudo -u vpngw php bin/unlock.php --user ivanenko --by admin.petrenko
  */
@@ -33,6 +33,9 @@ $key = $ip !== null ? "ip:$ip" : "user:$user";
 $c->rateLimiter()->clear($key);
 if ($user !== null) {
     $c->rateLimiter()->clear("mail:$user");
+}
+if ($ip !== null) {
+    $c->rateLimiter()->clear("admin-ip:$ip"); // admin panel lockout of the same address
 }
 $c->audit()->event('unlock', $user, $ip, ['by' => $by]);
 fwrite(STDOUT, "Unlocked $key\n");

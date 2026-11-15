@@ -12,25 +12,25 @@ use Psr\Http\Server\RequestHandlerInterface;
 use VpnGw\Security\Cidr;
 
 /**
- * Restricts a route to internal networks (TOTP enrollment). Uses REMOTE_ADDR only —
- * never X-Forwarded-For. Outsiders get a plain 404, as if the route did not exist.
+ * Restricts routes to internal networks (TOTP enrollment, admin panel). Uses REMOTE_ADDR
+ * only — never X-Forwarded-For. Outsiders get a plain 404, as if the route did not exist.
  */
 final class InternalNetworkOnly implements MiddlewareInterface
 {
     /**
      * @param list<string> $networks
-     * @param string|null $onlyPath restrict just this URI path (null = every request)
+     * @param list<string>|null $paths restrict these URI paths and everything below them (null = every request)
      */
     public function __construct(
         private readonly array $networks,
         private readonly ResponseFactoryInterface $responses,
-        private readonly ?string $onlyPath = null,
+        private readonly ?array $paths = null,
     ) {
     }
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        if ($this->onlyPath !== null && rtrim($request->getUri()->getPath(), '/') !== $this->onlyPath) {
+        if ($this->paths !== null && !$this->covers(rawurldecode($request->getUri()->getPath()))) {
             return $handler->handle($request);
         }
         $remote = $request->getServerParams()['REMOTE_ADDR'] ?? '';
@@ -38,5 +38,16 @@ final class InternalNetworkOnly implements MiddlewareInterface
             return $this->responses->createResponse(404);
         }
         return $handler->handle($request);
+    }
+
+    private function covers(string $path): bool
+    {
+        $path = rtrim($path, '/');
+        foreach ($this->paths ?? [] as $p) {
+            if ($path === $p || str_starts_with($path, $p . '/')) {
+                return true;
+            }
+        }
+        return false;
     }
 }

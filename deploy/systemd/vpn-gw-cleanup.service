@@ -9,4 +9,5 @@ ExecStart=/usr/bin/php /srv/vpn-gw/bin/cleanup.php
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/vpn-gw
+ReadWritePaths=-/var/log/vpn-gw
 PrivateTmp=yes
