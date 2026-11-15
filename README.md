@@ -59,11 +59,11 @@ install.sh    встановлення
 
 ## Документація
 
-- [Швидке встановлення](doc/QUICKSTART.md)
-- [Інструкція зі встановлення та експлуатації](doc/INSTALL_GUIDE.md)
-- [Панель адміністратора](doc/ADMIN_GUIDE.md)
-- [Посібник розробника](doc/DEVELOPMENT.md)
-- [Інструкція для співробітника](doc/USER_GUIDE.md)
+- [Швидке встановлення](https://github.com/ROOT-BSD/2FA-mikrotik-VPN/blob/main/doc/QUICKSTART.md)
+- [Інструкція зі встановлення та експлуатації](https://github.com/ROOT-BSD/2FA-mikrotik-VPN/blob/main/doc/INSTALL_GUIDE.md)
+- [Панель адміністратора](https://github.com/ROOT-BSD/2FA-mikrotik-VPN/blob/main/doc/ADMIN_GUIDE.md)
+- [Посібник розробника](https://github.com/ROOT-BSD/2FA-mikrotik-VPN/blob/main/doc/DEVELOPMENT.md)
+- [Інструкція для співробітника](https://github.com/ROOT-BSD/2FA-mikrotik-VPN/blob/main/doc/USER_GUIDE.md)
 
 ## Обмеження
 
