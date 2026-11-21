@@ -27,7 +27,7 @@ abstract class Controller
 
     protected function clientIp(ServerRequestInterface $request): ?string
     {
-        return ClientIp::resolve($request->getServerParams(), $this->cfg->list('TRUSTED_PROXIES'));
+        return ClientIp::resolve($request->getServerParams(), $this->cfg->list('TRUSTED_PROXIES'), $this->cfg->list('PRIVATE_CLIENT_NETWORKS'));
     }
 
     protected function now(): int

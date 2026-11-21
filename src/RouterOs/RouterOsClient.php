@@ -29,4 +29,12 @@ interface RouterOsClient
      * cut an already established tunnel.
      */
     public function dropSessions(string $username, string $ip): void;
+
+    /**
+     * Address lists on the router: names with entries and names used in firewall rules.
+     * Read-only (admin panel, choosing MT_LIST).
+     *
+     * @return array<string, array{entries: int, rules: int}>
+     */
+    public function addressLists(): array;
 }

@@ -15,10 +15,24 @@ final class FakeDiagnostics extends Diagnostics
     {
     }
 
-    public function routers(): array
+    public function routers(string $admin = 'admin'): array
     {
         $this->calls[] = 'routers';
         return [['name' => 'core', 'ok' => true, 'message' => 'OK'], ['name' => 'branch', 'ok' => false, 'message' => 'Connection timed out']];
+    }
+
+    public function addressLists(): array
+    {
+        $this->calls[] = 'lists';
+        return [
+            'lists' => [
+                'Allowed_VPN_Users' => ['core' => ['entries' => 3, 'rules' => 2]],
+                'blacklist' => ['core' => ['entries' => 120, 'rules' => 1]],
+                'VPN_2FA' => ['core' => ['entries' => 0, 'rules' => 1]],
+            ],
+            'errors' => [['name' => 'branch', 'ok' => false, 'message' => 'Connection timed out']],
+            'routers' => ['core'],
+        ];
     }
 
     public function ldap(string $username, string $password): array

@@ -103,4 +103,22 @@ final class AccessGranterTest extends TestCase
         $find = ApiSslClientV6::query('/ip/firewall/address-list/print', where: ['list' => 'L', 'address' => '1.2.3.4']);
         self::assertSame(['?list=L', '?address=1.2.3.4'], $find->getAttributes());
     }
+
+    /** 0.7: each router may use its own address-list. */
+    public function testPerRouterAddressList(): void
+    {
+        $g = new AccessGranter(
+            [$this->v7, $this->v6], 'Allowed_VPN_Users', '10:00:00', 36000,
+            sys_get_temp_dir() . '/vpngw-test-locks', Database::inMemory(), AuditLogger::null(), $this->clock,
+            [], ['core' => 'VPN_core'],
+        );
+        $g->grant('ivanenko', '203.0.113.45');
+        self::assertSame('VPN_core', array_values($this->v7->entries)[0]['list']);
+        self::assertSame('Allowed_VPN_Users', array_values($this->v6->entries)[0]['list'], 'router without own list uses MT_LIST');
+        $g->grant('ivanenko', '203.0.113.45');
+        self::assertCount(1, $this->v7->entries, 'refresh finds the entry in the router\'s own list');
+        $g->revoke('ivanenko', '203.0.113.45');
+        self::assertSame([], $this->v7->entries);
+        self::assertSame([], $this->v6->entries);
+    }
 }

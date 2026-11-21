@@ -64,6 +64,19 @@ final class FakeRouter implements RouterOsClient
         $this->droppedSessions[] = [$username, $ip];
     }
 
+    /** @var list<string> names used in firewall rules (for addressLists) */
+    public array $ruleLists = [];
+
+    public function addressLists(): array
+    {
+        $this->guard('lists');
+        $counts = [];
+        foreach ($this->entries as $e) {
+            $counts[$e['list']] = ($counts[$e['list']] ?? 0) + 1;
+        }
+        return \VpnGw\RouterOs\AddressLists::build($counts, $this->ruleLists);
+    }
+
     private function guard(string $op): void
     {
         $this->calls[] = $op;

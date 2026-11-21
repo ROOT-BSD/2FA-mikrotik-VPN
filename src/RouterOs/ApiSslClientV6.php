@@ -66,6 +66,24 @@ final class ApiSslClientV6 implements RouterOsClient
         }
     }
 
+    public function addressLists(): array
+    {
+        $entries = AddressLists::countEntries($this->run(self::query('/ip/firewall/address-list/print', set: ['.proplist' => 'list'])));
+        $refs = [];
+        foreach (AddressLists::RULE_TABLES as $table) {
+            try {
+                $rows = $this->run(self::query('/ip/firewall/' . $table . '/print', set: ['.proplist' => 'src-address-list,dst-address-list']));
+            } catch (RouterOsException $e) {
+                if ($table === 'raw') {
+                    continue; // no "raw" table before RouterOS 6.33
+                }
+                throw $e;
+            }
+            array_push($refs, ...AddressLists::ruleRefs($rows));
+        }
+        return AddressLists::build($entries, $refs);
+    }
+
     /** @return array<int|string, mixed> parsed response rows */
     private function run(Query $query): array
     {

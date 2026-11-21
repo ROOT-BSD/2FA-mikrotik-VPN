@@ -287,7 +287,7 @@ final class AdminPanelTest extends TestCase
         $routers = json_decode($saved['ROUTERS'], true);
         self::assertIsArray($routers);
         self::assertCount(3, $routers);
-        self::assertSame(['name' => 'dr', 'host' => 'mt-dr.company.local', 'version' => 7, 'port' => 443], $routers[2]);
+        self::assertSame(['name' => 'dr', 'host' => 'mt-dr.company.local', 'version' => 7, 'port' => 443, 'transport' => 'api'], $routers[2]);
 
         $this->boot();
         $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
@@ -304,6 +304,117 @@ final class AdminPanelTest extends TestCase
         $routers = json_decode($this->settings()->values()['ROUTERS'], true);
         self::assertIsArray($routers);
         self::assertCount(1, $routers);
+    }
+
+    public function testSshRouterWithKeyIsSavedEncrypted(): void
+    {
+        $this->login();
+        $key = \phpseclib3\Crypt\EC::createKey('Ed25519')->toString('OpenSSH');
+        $form = $this->mikrotikForm();
+        $form['routers'][2] = ['name' => 'old', 'host' => '10.0.30.1', 'version' => '6', 'port' => '22', 'transport' => 'ssh'];
+        $form['MT_SSH_USER'] = 'vpn_portal';
+        $form['MT_SSH_KEY'] = str_replace("\n", "\r\n", $key);
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        $v = $this->settings()->values();
+        self::assertSame(trim($key) . "\n", $v['MT_SSH_KEY'], 'line endings normalised');
+        foreach (['ROUTERS', 'MT_SSH_USER', 'MT_SSH_KEY'] as $k) {
+            self::assertTrue($this->db->allSettings()[$k]['encrypted'], $k);
+        }
+        $this->boot();
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertStringNotContainsString('PRIVATE KEY-----' . "\n", $html);
+        self::assertStringNotContainsString(substr(explode("\n", trim($key))[1], 0, 20), $html, 'key is write-only');
+        self::assertStringContainsString('не підтверджено', $html, 'host key not pinned yet');
+        self::assertStringContainsString('SSH-ключ не підтверджено для: old', self::body($this->request('GET', '/admin')));
+    }
+
+    public function testInvalidSshKeyIsRejected(): void
+    {
+        $this->login();
+        $form = $this->mikrotikForm();
+        $form['routers'][2] = ['name' => 'old', 'host' => '10.0.30.1', 'version' => '6', 'port' => '22', 'transport' => 'ssh'];
+        $form['MT_SSH_USER'] = 'vpn_portal';
+        $form['MT_SSH_KEY'] = "-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-key\n-----END OPENSSH PRIVATE KEY-----";
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(422, $r->getStatusCode());
+        self::assertStringContainsString('ключ не читається', self::body($r));
+        $form['MT_SSH_KEY'] = '';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(422, $r->getStatusCode(), 'SSH router without password or key');
+        self::assertStringContainsString('або приватний ключ', self::body($r));
+    }
+
+    public function testPinnedHostKeysFollowTheRouter(): void
+    {
+        $fp = 'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+        $this->cfgOverride['ROUTERS'] = '[{"name":"a","host":"10.0.30.1","version":6,"port":22,"transport":"ssh"},{"name":"b","host":"10.0.30.2","version":7,"port":22,"transport":"ssh"},{"name":"c","host":"10.0.30.3","version":7,"port":22,"transport":"ssh"}]';
+        $this->cfgOverride['MT_SSH_USER'] = 'vpn_portal';
+        $this->cfgOverride['MT_SSH_PASS'] = 'x';
+        $this->cfgOverride['MT_SSH_HOSTKEYS'] = json_encode(['a' => $fp, 'b' => $fp, 'c' => $fp]) ?: '';
+        $this->boot();
+        $this->login();
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertStringContainsString('SHA256:AAAAAAAAAAA', $html);
+        $form = $this->mikrotikForm();
+        $form['routers'] = [
+            ['name' => 'a', 'host' => '10.0.30.1', 'version' => '6', 'port' => '22', 'transport' => 'ssh'],
+            ['name' => 'b', 'host' => '10.0.30.22', 'version' => '7', 'port' => '22', 'transport' => 'ssh'],
+            ['name' => 'c', 'host' => '10.0.30.3', 'version' => '7', 'port' => '22', 'transport' => 'ssh', 'reset_key' => '1'],
+        ];
+        $form['MT_SSH_USER'] = 'vpn_portal';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame(['a' => $fp], json_decode($this->settings()->values()['MT_SSH_HOSTKEYS'], true),
+            'b: address changed, c: reset — both must be confirmed again');
+    }
+
+    public function testLdapWithoutCertificates(): void
+    {
+        $this->login();
+        $form = ['action' => 'save', 'LDAP_SECURITY' => 'starttls-insecure', 'LDAP_HOSTS' => 'ldap://dc01.company.local:389',
+            'LDAP_UPN_SUFFIX' => '@company.local', 'LDAP_BASE_DN' => 'DC=company,DC=local',
+            'LDAP_VPN_GROUP_DN' => 'CN=VPN-Users,OU=Groups,DC=company,DC=local', 'LDAP_CA_FILE' => ''];
+        $r = $this->request('POST', '/admin/settings/ad', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        $this->boot();
+        self::assertStringContainsString('сертифікат контролера домену не перевіряється', self::body($this->request('GET', '/admin')));
+
+        $form['LDAP_SECURITY'] = 'ldaps';
+        $r = $this->request('POST', '/admin/settings/ad', $form);
+        self::assertSame(422, $r->getStatusCode(), 'ldaps with ldap:// hosts');
+        $form['LDAP_HOSTS'] = 'ldaps://dc01.company.local:636';
+        $r = $this->request('POST', '/admin/settings/ad', $form);
+        self::assertSame(422, $r->getStatusCode(), 'verification needs a CA file');
+        self::assertStringContainsString('потрібен «Сертифікат CA»', self::body($r));
+
+        $form = ['LDAP_SECURITY' => 'plain', 'LDAP_HOSTS' => 'ldap://dc01.company.local'] + $form;
+        self::assertSame(303, $this->request('POST', '/admin/settings/ad', $form)->getStatusCode());
+        $this->boot();
+        self::assertStringContainsString('без шифрування', self::body($this->request('GET', '/admin')));
+    }
+
+    public function testAdSettingsUseDomainAndGroupName(): void
+    {
+        $this->login();
+        $html = self::body($this->request('GET', '/admin/settings/ad'));
+        self::assertStringContainsString('name="LDAP_DOMAIN"', $html);
+        self::assertStringContainsString('name="LDAP_VPN_GROUP"', $html);
+        self::assertStringNotContainsString('name="LDAP_BASE_DN"', $html);
+        self::assertStringNotContainsString('name="LDAP_VPN_GROUP_DN"', $html);
+        $r = $this->request('POST', '/admin/settings/ad', ['action' => 'save', 'LDAP_SECURITY' => 'ldaps',
+            'LDAP_HOSTS' => 'ldaps://dc01.nerc.gov.ua:636', 'LDAP_DOMAIN' => 'nerc.gov.ua', 'LDAP_VPN_GROUP' => 'VPN-Users',
+            'LDAP_CA_FILE' => '/etc/ssl/company-ca.pem']);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        $this->boot();
+        $html = self::body($this->request('GET', '/admin/settings/ad'));
+        self::assertStringContainsString('value="nerc.gov.ua"', $html);
+        self::assertStringNotContainsString('DC=nerc', $html);
+        $r = $this->request('POST', '/admin/settings/ad', ['action' => 'save', 'LDAP_SECURITY' => 'ldaps',
+            'LDAP_HOSTS' => 'ldaps://dc01.nerc.gov.ua:636', 'LDAP_DOMAIN' => 'DC=nerc,DC=gov,DC=ua', 'LDAP_VPN_GROUP' => 'VPN-Users',
+            'LDAP_CA_FILE' => '/etc/ssl/company-ca.pem']);
+        self::assertSame(422, $r->getStatusCode());
+        self::assertStringContainsString('nerc.gov.ua', self::body($r));
     }
 
     public function testInvalidSettingsAreNotSaved(): void
@@ -566,5 +677,170 @@ final class AdminPanelTest extends TestCase
         self::assertSame(422, $r->getStatusCode());
         self::assertStringContainsString('не є ZIP', self::body($r));
         self::assertSame([], glob($this->tmp . '/data/spool/*') ?: [], 'nothing left in the spool');
+    }
+
+    /** 0.5: own login and password per router; the password is write-only. */
+    public function testPerRouterCredentials(): void
+    {
+        $this->login();
+        $form = $this->mikrotikForm();
+        $form['routers'][0] += ['orig' => 'core', 'user' => 'portal_core', 'password' => 'Core-Pa$$-1'];
+        $form['routers'][1] += ['orig' => 'branch'];
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        $saved = $this->settings()->values();
+        self::assertSame('{"core":"Core-Pa$$-1"}', $saved['ROUTER_PASSWORDS']);
+        self::assertSame('portal_core', json_decode($saved['ROUTERS'], true)[0]['user']);
+        self::assertArrayNotHasKey('user', json_decode($saved['ROUTERS'], true)[1], 'no own user = common one');
+        foreach ($this->db->allSettings() as $key => $row) {
+            if ($key === 'ROUTER_PASSWORDS') {
+                self::assertTrue($row['encrypted']);
+                self::assertStringNotContainsString('Core-Pa', $row['value']);
+            }
+        }
+
+        $this->boot();
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertStringNotContainsString('Core-Pa', $html);
+        self::assertStringContainsString('value="portal_core"', $html);
+        self::assertStringContainsString('власний', $html);
+        self::assertStringContainsString('placeholder="vpn_portal"', $html);
+
+        // empty password field keeps the stored one; renaming the row keeps it too
+        $form['routers'][0] = ['orig' => 'core', 'name' => 'core2', 'host' => '10.0.10.1', 'version' => '7', 'port' => '8443', 'user' => 'portal_core'];
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame('{"core2":"Core-Pa$$-1"}', $this->settings()->values()['ROUTER_PASSWORDS']);
+        $this->boot();
+
+        // a new address needs the password again
+        $form['routers'][0] = ['orig' => 'core2', 'name' => 'core2', 'host' => '10.9.9.9', 'version' => '7', 'port' => '8443', 'user' => 'portal_core'];
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(422, $r->getStatusCode());
+        self::assertStringContainsString('введіть його пароль ще раз', self::body($r));
+        $form['routers'][0]['password'] = 'New-Pa$$-2';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame('{"core2":"New-Pa$$-2"}', $this->settings()->values()['ROUTER_PASSWORDS']);
+        $this->boot();
+
+        // «типовий» removes the own password
+        $form['routers'][0] = ['orig' => 'core2', 'name' => 'core2', 'host' => '10.9.9.9', 'version' => '7', 'port' => '8443', 'clear_password' => '1'];
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame('{}', $this->settings()->values()['ROUTER_PASSWORDS']);
+        self::assertArrayNotHasKey('user', json_decode($this->settings()->values()['ROUTERS'], true)[0]);
+    }
+
+    public function testRouterUserIsValidated(): void
+    {
+        $this->login();
+        $form = $this->mikrotikForm();
+        $form['routers'][0]['user'] = 'x" ; /system reset';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(422, $r->getStatusCode());
+        self::assertStringContainsString('користувач — лише латиниця', self::body($r));
+    }
+
+    public function testMissingSshCredentialsNameTheRouter(): void
+    {
+        $this->login();
+        $form = $this->mikrotikForm();
+        $form['routers'][1] = ['name' => 'branch', 'host' => '10.0.20.1', 'version' => '6', 'port' => '22', 'transport' => 'ssh', 'user' => 'portal_b'];
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(422, $r->getStatusCode());
+        self::assertStringContainsString('маршрутизатор «branch»', self::body($r));
+    }
+
+    /** 0.6: choosing MT_LIST from the lists that exist on the routers. */
+    public function testChooseAddressListFromRouters(): void
+    {
+        $this->login();
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertStringContainsString('value="lists"', $html, 'button «Вибрати з MikroTik»');
+
+        $form = $this->mikrotikForm();
+        $form['action'] = 'lists';
+        $form['MT_TIMEOUT'] = '07:00:00';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(200, $r->getStatusCode());
+        $html = self::body($r);
+        self::assertStringContainsString('<option value="Allowed_VPN_Users" selected>Allowed_VPN_Users — core: 3 адреси, 2 правила</option>', $html);
+        self::assertStringContainsString('blacklist — core: 120 адрес, 1 правило', $html);
+        self::assertStringContainsString('VPN_2FA — core: 0 адрес, 1 правило', $html);
+        self::assertStringContainsString('value="__new"', $html);
+        self::assertStringContainsString('Connection timed out', $html, 'router errors are shown');
+        self::assertStringContainsString('value="07:00:00"', $html, 'typed values stay on the page');
+        self::assertArrayNotHasKey('MT_TIMEOUT', $this->settings()->values(), 'reading lists saves nothing');
+
+        $form['action'] = 'save';
+        $form['MT_LIST'] = 'VPN_2FA';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame('VPN_2FA', $this->settings()->values()['MT_LIST']);
+
+        $this->boot();
+        $form['MT_LIST'] = '__new';
+        $form['MT_LIST__new'] = 'VPN_New';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame('VPN_New', $this->settings()->values()['MT_LIST']);
+
+        $this->boot();
+        $form['MT_LIST__new'] = 'bad name';
+        self::assertSame(422, $this->request('POST', '/admin/settings/mikrotik', $form)->getStatusCode());
+    }
+
+    public function testCurrentListMissingOnRoutersIsKeptAsOption(): void
+    {
+        $this->cfgOverride['MT_LIST'] = 'Old_List';
+        $this->boot();
+        $this->login();
+        $form = $this->mikrotikForm();
+        $form['action'] = 'lists';
+        $html = self::body($this->request('POST', '/admin/settings/mikrotik', $form));
+        self::assertStringContainsString('<option value="Old_List" selected>Old_List — поточний; на маршрутизаторах не знайдено</option>', $html);
+    }
+
+    /** 0.7: address-list per router in the routers table. */
+    public function testPerRouterAddressListInPanel(): void
+    {
+        $this->login();
+        $form = $this->mikrotikForm();
+        $form['routers'][0]['list'] = 'VPN_core';
+        $form['routers'][1]['list'] = '';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        $routers = json_decode($this->settings()->values()['ROUTERS'], true);
+        self::assertSame('VPN_core', $routers[0]['list']);
+        self::assertArrayNotHasKey('list', $routers[1], 'empty = MT_LIST');
+
+        $this->boot();
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertStringContainsString('name="routers[0][list]" value="VPN_core"', $html);
+        self::assertStringContainsString('placeholder="типовий: Allowed_VPN_Users"', $html);
+
+        // after «Вибрати списки з MikroTik»: a choice per router (FakeDiagnostics: core read, branch failed)
+        $form['action'] = 'lists';
+        $html = self::body($this->request('POST', '/admin/settings/mikrotik', $form));
+        self::assertStringContainsString('<select name="routers[0][list]"', $html);
+        self::assertStringContainsString('VPN_core — на маршрутизаторі не знайдено', $html);
+        self::assertStringContainsString('типовий: Allowed_VPN_Users — 3 адреси, 2 правила', $html);
+        self::assertStringContainsString('<option value="blacklist">blacklist — 120 адрес, 1 правило</option>', $html);
+        self::assertStringContainsString('списки не прочитано', $html, 'branch could not be read');
+        self::assertStringNotContainsString('<select name="routers[1][list]"', $html);
+
+        // choose «інший / новий»
+        $form['action'] = 'save';
+        $form['routers'][0]['list'] = '__new';
+        $form['routers'][0]['list_new'] = 'VPN_2FA';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame('VPN_2FA', json_decode($this->settings()->values()['ROUTERS'], true)[0]['list']);
+
+        $form['routers'][0]['list_new'] = 'bad list';
+        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
+        self::assertSame(422, $r->getStatusCode());
+        self::assertStringContainsString('address-list — лише латиниця', self::body($r));
     }
 }

@@ -56,12 +56,34 @@ final class SettingsStore
             if (!in_array($key, SettingsSchema::editableKeys(), true)) {
                 throw new \InvalidArgumentException("Setting $key is not editable");
             }
-            $secret = SettingsSchema::isSecret($key);
-            $rows[$key] = ['value' => $secret ? $this->crypto->encrypt($value) : $value, 'encrypted' => $secret];
+            $enc = SettingsSchema::isEncrypted($key);
+            $rows[$key] = ['value' => $enc ? $this->crypto->encrypt($value) : $value, 'encrypted' => $enc];
         }
         if ($rows !== []) {
             $this->db->saveSettings($rows, $by, $at);
         }
+    }
+
+    /**
+     * Encrypts values saved by an older version in clear text for keys that are now
+     * encrypted (e.g. ROUTERS, MT_USER since 0.3). Returns the re-encrypted keys.
+     *
+     * @return list<string>
+     */
+    public function encryptLegacyValues(): array
+    {
+        $plain = [];
+        $meta = [];
+        foreach ($this->db->allSettings() as $key => $row) {
+            if (!$row['encrypted'] && SettingsSchema::isEncrypted($key) && in_array($key, SettingsSchema::editableKeys(), true)) {
+                $plain[$key] = $row['value'];
+                $meta[$key] = $row;
+            }
+        }
+        foreach ($plain as $key => $value) {
+            $this->db->saveSettings([$key => ['value' => $this->crypto->encrypt($value), 'encrypted' => true]], $meta[$key]['updated_by'], $meta[$key]['updated_at']);
+        }
+        return array_keys($plain);
     }
 
     /** Drops the panel value, so .env applies again. */

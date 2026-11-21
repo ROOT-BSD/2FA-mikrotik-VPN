@@ -38,7 +38,7 @@ CHECK_ONLY=0
 WITH_NFT=0
 ASSUME_YES=0
 PHP_MIN="8.2"
-PHP_EXTS=(ldap curl sodium pdo_sqlite mbstring openssl sockets json ctype tokenizer xml dom)
+PHP_EXTS=(ldap curl sodium pdo_sqlite mbstring openssl sockets json ctype tokenizer xml dom gmp)
 
 # ------------------------------------------------------------------ output ---
 if [[ -t 1 ]]; then R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; B=$'\e[1m'; N=$'\e[0m'; else R=; G=; Y=; B=; N=; fi
@@ -126,9 +126,9 @@ fi
 
 # =============================================================== 2. packages ==
 step "2. Системні пакети"
-PKGS=(apache2 ssl-cert ca-certificates curl openssl unzip git sudo sqlite3 chrony ldap-utils netcat-openbsd composer
+PKGS=(apache2 ssl-cert ca-certificates curl openssl unzip git sudo sqlite3 chrony ldap-utils netcat-openbsd openssh-client composer
       "php${PHPV}-fpm" "php${PHPV}-cli" "php${PHPV}-ldap" "php${PHPV}-curl" "php${PHPV}-sqlite3"
-      "php${PHPV}-mbstring" "php${PHPV}-xml" "php${PHPV}-intl" "php${PHPV}-opcache")
+      "php${PHPV}-mbstring" "php${PHPV}-xml" "php${PHPV}-intl" "php${PHPV}-opcache" "php${PHPV}-gmp")
 MISSING=()
 for p in "${PKGS[@]}"; do pkg_installed "$p" || MISSING+=("$p"); done
 if [[ ${#MISSING[@]} -eq 0 ]]; then
@@ -164,7 +164,7 @@ if have php; then
 else
   bad "PHP CLI не встановлено"
 fi
-if have composer; then ok "Composer $(composer --version 2>/dev/null | awk '{print $3}')"; else bad "Composer не встановлено"; fi
+if have composer; then ok "Composer $(COMPOSER_ALLOW_SUPERUSER=1 composer --no-interaction --version </dev/null 2>/dev/null | awk '{print $3}')"; else bad "Composer не встановлено"; fi
 if [[ $FAIL -gt $FAIL_BEFORE_PHP && $CHECK_ONLY -eq 0 ]]; then die "є критичні проблеми з PHP — встановлення зупинено"; fi
 
 # ================================================================= 4. Apache ==
@@ -224,12 +224,27 @@ if [[ $CHECK_ONLY -eq 0 ]]; then
   install -d -m 750 "$TARGET"
   chown -R "$APP_USER:$APP_USER" "$TARGET"   # composer runs as the app user
   info "composer install (це може зайняти хвилину)..."
-  if sudo -u "$APP_USER" -H env COMPOSER_HOME="$DATA_DIR/.composer" composer install -d "$TARGET" \
-       --no-dev --classmap-authoritative --no-interaction --no-progress -q; then
+  COMPOSER_CMD=(sudo -u "$APP_USER" -H env COMPOSER_HOME="$DATA_DIR/.composer" composer)
+  COMPOSER_OPTS=(-d "$TARGET" --no-dev --classmap-authoritative --no-interaction --no-progress)
+  COMPOSER_LOG="$(mktemp)"
+  if "${COMPOSER_CMD[@]}" install "${COMPOSER_OPTS[@]}" >"$COMPOSER_LOG" 2>&1; then
     ok "Залежності встановлено"
+  elif grep -qiE 'lock file|not present in the lock' "$COMPOSER_LOG"; then
+    # composer.lock was created on this server by the previous version; the new release
+    # added or changed dependencies in composer.json, so the lock file has to be refreshed.
+    info "composer.json нової версії змінився — оновлюю composer.lock (composer update)..."
+    cp -a "$TARGET/composer.lock" "$TARGET/composer.lock.bak" 2>/dev/null || true
+    if "${COMPOSER_CMD[@]}" update "${COMPOSER_OPTS[@]}" --with-all-dependencies >"$COMPOSER_LOG" 2>&1; then
+      ok "Залежності оновлено (попередній lock-файл: composer.lock.bak)"
+    else
+      tail -n 15 "$COMPOSER_LOG" >&2
+      die "composer update завершився з помилкою (перевірте доступ до packagist.org або проксі)"
+    fi
   else
+    tail -n 15 "$COMPOSER_LOG" >&2
     die "composer install завершився з помилкою (перевірте доступ до packagist.org або проксі)"
   fi
+  rm -f "$COMPOSER_LOG"
   if sudo -u "$APP_USER" -H env COMPOSER_HOME="$DATA_DIR/.composer" composer audit -d "$TARGET" --no-dev --no-interaction >/dev/null 2>&1; then
     ok "composer audit: вразливостей не знайдено"
   else
@@ -281,14 +296,19 @@ if [[ -f "$ENV" ]]; then
   else
     NEED_EDIT=1
   fi
-  for k in MT_PASS LDAP_HOSTS LDAP_UPN_SUFFIX LDAP_BASE_DN LDAP_VPN_GROUP_DN; do
+  for k in LDAP_HOSTS LDAP_DOMAIN LDAP_VPN_GROUP; do
     v="$(cfg_get "$k")"
-    if [[ -z "$v" || "$v" == *company.local* || "$v" == *DC=company,DC=local* ]]; then warn "$k: заповніть реальним значенням (панель адміністратора або .env)"; PLACEHOLDERS=1; fi
+    if [[ -z "$v" || "$v" == *company.local* ]]; then warn "$k: заповніть реальним значенням (панель адміністратора або .env)"; PLACEHOLDERS=1; fi
   done
-  for k in LDAP_CA_FILE MT_CA_FILE; do
-    f="$(cfg_get "$k")"
-    [[ -s "$f" ]] && ok "$k: $f" || { bad "$k: файл '$f' не знайдено (сертифікат корпоративного CA)"; }
-  done
+  LDAP_MODE="$(cfg_get LDAP_SECURITY)"; LDAP_MODE="${LDAP_MODE:-ldaps}"
+  case "$LDAP_MODE" in
+    ldaps|starttls) f="$(cfg_get LDAP_CA_FILE)"; [[ -s "$f" ]] && ok "LDAP_CA_FILE: $f" || bad "LDAP_CA_FILE: файл '$f' не знайдено (сертифікат корпоративного CA)" ;;
+    plain) warn "AD: режим без шифрування (LDAP_SECURITY=plain) — паролі передаються мережею відкритим текстом" ;;
+    *) warn "AD: сертифікат контролера домену не перевіряється (LDAP_SECURITY=$LDAP_MODE)" ;;
+  esac
+  if php -r '$r=json_decode($argv[1],true); foreach((array)$r as $x) if(($x["transport"]??"api")==="api") exit(0); exit(1);' "$(cfg_get ROUTERS)" 2>/dev/null; then
+    f="$(cfg_get MT_CA_FILE)"; [[ -s "$f" ]] && ok "MT_CA_FILE: $f" || bad "MT_CA_FILE: файл '$f' не знайдено (потрібен для маршрутизаторів з протоколом API)"
+  fi
 fi
 BASE_PATH="$(env_get "$ENV" APP_BASE_PATH 2>/dev/null || true)"; BASE_PATH="${BASE_PATH:-/k7f3x}"
 
@@ -397,21 +417,48 @@ tls_check() { # host port cafile [starttls]
   grep -q "Verify return code: 0 (ok)" <<<"$out"
 }
 if [[ -f "$ENV" ]]; then
-  LCA="$(cfg_get LDAP_CA_FILE)"; MCA="$(cfg_get MT_CA_FILE)"
+  LCA="$(cfg_get LDAP_CA_FILE)"; MCA="$(cfg_get MT_CA_FILE)"; LDAP_MODE="$(cfg_get LDAP_SECURITY)"; LDAP_MODE="${LDAP_MODE:-ldaps}"
   IFS=',' read -ra HOSTS <<<"$(cfg_get LDAP_HOSTS)"
   for u in "${HOSTS[@]}"; do
-    u="${u// /}"; hp="${u#ldaps://}"; h="${hp%%:*}"; p="${hp##*:}"; [[ "$p" == "$h" ]] && p=636
-    if tls_check "$h" "$p" "$LCA"; then ok "LDAPS $h:$p — TLS і сертифікат OK"
-    elif timeout 5 bash -c ">/dev/tcp/$h/$p" 2>/dev/null; then bad "LDAPS $h:$p доступний, але сертифікат не довірений (LDAP_CA_FILE)"
-    else bad "LDAPS $h:$p недоступний"; fi
+    u="${u// /}"; hp="${u#*://}"; h="${hp%%:*}"; p="${hp##*:}"
+    [[ "$p" == "$h" ]] && { [[ "$LDAP_MODE" == ldaps* ]] && p=636 || p=389; }
+    tcp_ok() { timeout 5 bash -c ">/dev/tcp/$h/$p" 2>/dev/null; }
+    case "$LDAP_MODE" in
+      ldaps)
+        if tls_check "$h" "$p" "$LCA"; then ok "LDAPS $h:$p — TLS і сертифікат OK"
+        elif tcp_ok; then bad "LDAPS $h:$p доступний, але сертифікат не довірений (LDAP_CA_FILE)"
+        else bad "LDAPS $h:$p недоступний"; fi ;;
+      starttls)
+        if tls_check "$h" "$p" "$LCA" ldap; then ok "LDAP+StartTLS $h:$p — TLS і сертифікат OK"
+        elif tcp_ok; then bad "LDAP $h:$p доступний, але StartTLS не вдався або сертифікат не довірений"
+        else bad "LDAP $h:$p недоступний"; fi ;;
+      ldaps-insecure|starttls-insecure)
+        st=""; [[ "$LDAP_MODE" == starttls* ]] && st=ldap
+        if timeout 8 openssl s_client -connect "$h:$p" ${st:+-starttls $st} </dev/null 2>/dev/null | grep -q "BEGIN CERTIFICATE"; then
+          ok "LDAP $h:$p — TLS встановлено (сертифікат не перевіряється)"
+        elif tcp_ok; then bad "LDAP $h:$p доступний, але TLS не встановлено"
+        else bad "LDAP $h:$p недоступний"; fi ;;
+      plain)
+        tcp_ok && ok "LDAP $h:$p доступний (без шифрування)" || bad "LDAP $h:$p недоступний" ;;
+    esac
   done
-  ROUTERS_JSON="$(cfg_get ROUTERS)"
-  while IFS=$'\t' read -r rname rhost rport rver; do
+  ROUTERS_JSON="$(cfg_get ROUTERS)"; HOSTKEYS_JSON="$(cfg_get MT_SSH_HOSTKEYS)"
+  while IFS=$'\t' read -r rname rhost rport rver rtr; do
     [[ -z "$rname" ]] && continue
+    if [[ "$rtr" == ssh ]]; then
+      # all host keys the router offers (RSA, ed25519...): the pinned one must be among them
+      fp="$(timeout 8 ssh-keyscan -T 5 -p "$rport" "$rhost" 2>/dev/null | ssh-keygen -lf - 2>/dev/null | awk '{print $2}' | paste -sd' ' - || true)"
+      pinned="$(php -r '$k=json_decode($argv[1],true); echo is_array($k) ? ($k[$argv[2]] ?? "") : "";' "${HOSTKEYS_JSON:-{\}}" "$rname" 2>/dev/null || true)"
+      if [[ -z "$fp" ]]; then bad "MikroTik $rname $rhost:$rport (SSH) недоступний (/ip service ssh, address=, firewall)"
+      elif [[ -z "$pinned" ]]; then warn "MikroTik $rname (SSH $rhost:$rport) — ключ $fp ще не підтверджено: панель → MikroTik → «Перевірити MikroTik»"
+      elif [[ " $fp " == *" $pinned "* ]]; then ok "MikroTik $rname (SSH $rhost:$rport, v$rver) — ключ хоста збігається"
+      else bad "MikroTik $rname (SSH) — КЛЮЧ ХОСТА ЗМІНИВСЯ: збережено $pinned, отримано $fp"; fi
+      continue
+    fi
     if tls_check "$rhost" "$rport" "$MCA"; then ok "MikroTik $rname ($rhost:$rport, v$rver) — TLS і сертифікат OK"
     elif timeout 5 bash -c ">/dev/tcp/$rhost/$rport" 2>/dev/null; then bad "MikroTik $rname $rhost:$rport доступний, але сертифікат не довірений (MT_CA_FILE / SAN = IP)"
     else bad "MikroTik $rname $rhost:$rport недоступний (сервіс, address= у /ip service, firewall)"; fi
-  done < <(php -r '$r=json_decode($argv[1],true); if(is_array($r)) foreach($r as $x) echo ($x["name"]??""),"\t",($x["host"]??""),"\t",($x["port"]??""),"\t",($x["version"]??""),"\n";' "$ROUTERS_JSON" 2>/dev/null)
+  done < <(php -r '$r=json_decode($argv[1],true); if(is_array($r)) foreach($r as $x) echo ($x["name"]??""),"\t",($x["host"]??""),"\t",($x["port"]??""),"\t",($x["version"]??""),"\t",($x["transport"]??"api"),"\n";' "$ROUTERS_JSON" 2>/dev/null)
   SMTP_HOST="$(cfg_get SMTP_HOST)"
   if [[ -n "$SMTP_HOST" ]]; then
     SPORT="$(cfg_get SMTP_PORT)"; SCA="$(cfg_get SMTP_CA_FILE)"; SCA="${SCA:-/etc/ssl/certs/ca-certificates.crt}"

@@ -77,6 +77,24 @@ final class RestClientV7 implements RouterOsClient
         }
     }
 
+    public function addressLists(): array
+    {
+        $entries = AddressLists::countEntries($this->request('GET', '/ip/firewall/address-list', ['.proplist' => 'list']));
+        $refs = [];
+        foreach (AddressLists::RULE_TABLES as $table) {
+            try {
+                $rows = $this->request('GET', '/ip/firewall/' . $table, ['.proplist' => 'src-address-list,dst-address-list']);
+            } catch (RouterOsException $e) {
+                if ($table === 'raw') {
+                    continue;
+                }
+                throw $e;
+            }
+            array_push($refs, ...AddressLists::ruleRefs($rows));
+        }
+        return AddressLists::build($entries, $refs);
+    }
+
     /**
      * @param 'GET'|'PUT'|'PATCH'|'DELETE' $method
      * @param array<string, string> $query

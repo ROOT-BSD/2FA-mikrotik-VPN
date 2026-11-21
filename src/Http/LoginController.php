@@ -8,6 +8,7 @@ use Psr\Clock\ClockInterface;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use VpnGw\Auth\Authenticator;
+use VpnGw\Auth\LdapAuthenticator;
 use VpnGw\Auth\TotpService;
 use VpnGw\Config;
 use VpnGw\Log\AuditLogger;
@@ -42,7 +43,7 @@ final class LoginController extends Controller
     public function submit(Request $request, Response $response): Response
     {
         $ip = $this->clientIp($request);
-        $user = strtolower(trim($this->field($request, 'username', 64)));
+        $user = LdapAuthenticator::normalizeUsername($this->field($request, 'username', 128), $this->cfg->ldapDomain());
         $pass = $this->field($request, 'password', 257);
 
         if ($ip === null) {

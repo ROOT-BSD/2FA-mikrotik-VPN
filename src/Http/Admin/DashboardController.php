@@ -37,6 +37,16 @@ final class DashboardController extends AdminController
             if ($this->cfg->get('BACKUP_PASSPHRASE') === '') {
                 $warnings[] = 'Не задано пароль шифрування резервних копій — копії не створюються.';
             }
+            $ldapMode = $this->cfg->get('LDAP_SECURITY');
+            if ($ldapMode === 'plain') {
+                $warnings[] = 'AD: підключення без шифрування — паролі користувачів передаються мережею відкритим текстом.';
+            } elseif (!$this->cfg->ldapVerifiesCertificate()) {
+                $warnings[] = 'AD: сертифікат контролера домену не перевіряється — немає захисту від підміни сервера.';
+            }
+            $unconfirmed = array_filter($this->cfg->routers(), fn ($r) => $r['transport'] === 'ssh' && !isset($this->cfg->sshHostKeys()[$r['name']]));
+            if ($unconfirmed !== []) {
+                $warnings[] = 'SSH-ключ не підтверджено для: ' . implode(', ', array_column($unconfirmed, 'name')) . ' — MikroTik → «Перевірити MikroTik».';
+            }
             if ($this->cfg->get('SMTP_HOST') === '') {
                 $warnings[] = 'Пошту вимкнено: користувачі не отримують сповіщень про відкриття доступу.';
             }

@@ -7,6 +7,7 @@ namespace VpnGw\RouterOs;
 use Psr\Clock\ClockInterface;
 use VpnGw\Config;
 use VpnGw\Log\AuditLogger;
+use VpnGw\Security\ClientIp;
 use VpnGw\Storage\Database;
 
 /**
@@ -15,7 +16,11 @@ use VpnGw\Storage\Database;
  */
 final class AccessGranter
 {
-    /** @param list<RouterOsClient> $routers */
+    /**
+     * @param list<RouterOsClient> $routers
+     * @param list<string> $privateNetworks private CIDRs whose client addresses may be whitelisted
+     * @param array<string, string> $routerLists address-list per router name; others use $list
+     */
     public function __construct(
         private readonly array $routers,
         private readonly string $list,
@@ -25,7 +30,14 @@ final class AccessGranter
         private readonly Database $db,
         private readonly AuditLogger $audit,
         private readonly ClockInterface $clock,
+        private readonly array $privateNetworks = [],
+        private readonly array $routerLists = [],
     ) {
+    }
+
+    private function listFor(RouterOsClient $r): string
+    {
+        return $this->routerLists[$r->name()] ?? $this->list;
     }
 
     public static function fromConfig(Config $cfg, Database $db, AuditLogger $audit, ClockInterface $clock): self
@@ -39,6 +51,8 @@ final class AccessGranter
             $db,
             $audit,
             $clock,
+            $cfg->list('PRIVATE_CLIENT_NETWORKS'),
+            $cfg->routerLists(),
         );
     }
 
@@ -58,9 +72,10 @@ final class AccessGranter
         $this->assertIp($ip);
         $comment = self::comment($username);
         $failed = $this->eachRouter(function (RouterOsClient $r) use ($ip, $comment, $username): void {
-            $id = $r->findEntry($this->list, $ip);
+            $list = $this->listFor($r);
+            $id = $r->findEntry($list, $ip);
             if ($id === null) {
-                $r->addEntry($this->list, $ip, $this->timeout, $comment);
+                $r->addEntry($list, $ip, $this->timeout, $comment);
                 $this->audit->event('mt_add', $username, $ip, ['router' => $r->name()]);
             } else {
                 $r->updateEntry($id, $this->timeout, $comment);
@@ -86,7 +101,7 @@ final class AccessGranter
     {
         $this->assertIp($ip);
         $failed = $this->eachRouter(function (RouterOsClient $r) use ($ip, $username): void {
-            $id = $r->findEntry($this->list, $ip);
+            $id = $r->findEntry($this->listFor($r), $ip);
             if ($id !== null) {
                 $r->removeEntry($id);
             }
@@ -133,7 +148,7 @@ final class AccessGranter
 
     private function assertIp(string $ip): void
     {
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+        if (!ClientIp::isAcceptable($ip, $this->privateNetworks)) {
             throw new \InvalidArgumentException('Refusing to whitelist a non-public or invalid IPv4 address');
         }
     }

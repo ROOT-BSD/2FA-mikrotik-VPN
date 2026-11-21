@@ -10,13 +10,19 @@ namespace VpnGw\Settings;
  * stays in .env only: changing those from the web could lock the administrator out
  * or let a web compromise disable protections.
  *
- * @phpstan-type Field array{key: string, label: string, type: string, help?: string, options?: array<string, string>}
+ * @phpstan-type Field array{key: string, label: string, type: string, help?: string, group?: string, options?: array<string, string>}
  * @phpstan-type Section array{title: string, intro: string, fields: list<Field>}
  */
 final class SettingsSchema
 {
-    /** Values stored encrypted with APP_KEY and never sent back to the browser. */
-    public const SECRETS = ['MT_PASS', 'SMTP_PASS', 'BACKUP_PASSPHRASE'];
+    /** Write-only values: stored encrypted with APP_KEY and never sent back to the browser. */
+    public const SECRETS = ['MT_PASS', 'SMTP_PASS', 'BACKUP_PASSPHRASE', 'MT_SSH_PASS', 'MT_SSH_KEY', 'MT_SSH_KEY_PASS', 'ROUTER_PASSWORDS'];
+
+    /**
+     * Router connection parameters that are shown in the panel but also stored encrypted
+     * (addresses, logins, pinned SSH host keys).
+     */
+    public const ENCRYPTED = ['ROUTERS', 'MT_USER', 'MT_SSH_USER', 'MT_SSH_HOSTKEYS'];
 
     /** Audit-log categories; "admin" and "system" are always written. */
     public const LOG_CATEGORIES = [
@@ -32,14 +38,21 @@ final class SettingsSchema
     public const SECTIONS = [
         'mikrotik' => [
             'title' => 'Підключення до MikroTik',
-            'intro' => 'RouterOS 7 — REST API (www-ssl), RouterOS 6 — API-SSL. Сертифікат маршрутизатора має бути виданий корпоративним CA.',
+            'intro' => 'Протокол для кожного маршрутизатора: API (RouterOS 7 — REST через www-ssl, RouterOS 6 — API-SSL; сертифікат від корпоративного CA) або SSH (RouterOS 6 і 7; перевірка ключа хоста). Кожен маршрутизатор може мати власні користувача й пароль; якщо їх не задано — використовуються типові для його протоколу (нижче). Параметри підключення зберігаються зашифрованими.',
             'fields' => [
                 ['key' => 'ROUTERS', 'label' => 'Маршрутизатори', 'type' => 'routers'],
-                ['key' => 'MT_USER', 'label' => 'Користувач API', 'type' => 'text', 'help' => 'Окремий користувач з групою vpn-portal (read, write, api, rest-api).'],
-                ['key' => 'MT_PASS', 'label' => 'Пароль API', 'type' => 'secret'],
-                ['key' => 'MT_CA_FILE', 'label' => 'Сертифікат CA (файл PEM)', 'type' => 'text', 'help' => 'Наприклад, /etc/ssl/company-ca.pem'],
-                ['key' => 'MT_LIST', 'label' => 'Address-list', 'type' => 'text'],
+                ['key' => 'MT_SSH_HOSTKEYS', 'label' => 'Ключі SSH маршрутизаторів', 'type' => 'hostkeys'],
+                ['key' => 'ROUTER_PASSWORDS', 'label' => 'Паролі маршрутизаторів', 'type' => 'routerpasswords'],
+                ['key' => 'MT_LIST', 'label' => 'Типовий address-list', 'type' => 'mtlist', 'help' => 'Список для маршрутизаторів, у яких у таблиці не вибрано власний. На нього мають посилатися правила firewall (src-address-list). Кнопка «Вибрати з MikroTik» читає наявні списки з маршрутизаторів.'],
                 ['key' => 'MT_TIMEOUT', 'label' => 'Тривалість доступу (ГГ:ХХ:СС)', 'type' => 'text', 'help' => 'Після цього часу MikroTik сам видаляє IP зі списку.'],
+                ['key' => 'PRIVATE_CLIENT_NETWORKS', 'label' => 'Дозволені приватні мережі клієнтів', 'type' => 'text', 'help' => 'Через кому, наприклад 172.20.2.0/23. Звичайно портал приймає лише публічні IP; з цих мереж вхід теж дозволено (тестування з офісу, клієнти за внутрішнім каналом). Порожньо — лише публічні IP.'],
+                ['key' => 'MT_USER', 'label' => 'API: типовий користувач', 'type' => 'text', 'group' => 'API (REST / API-SSL) — типові облікові дані', 'help' => 'Для маршрутизаторів з протоколом API без власного користувача. Окремий користувач з групою vpn-portal (read, write, api, rest-api). Порожньо — якщо всі API-маршрутизатори мають власних користувачів.'],
+                ['key' => 'MT_PASS', 'label' => 'API: типовий пароль', 'type' => 'secret', 'help' => 'Для маршрутизаторів з протоколом API без власного пароля.'],
+                ['key' => 'MT_CA_FILE', 'label' => 'API: сертифікат CA (файл PEM)', 'type' => 'text', 'help' => 'Наприклад, /etc/ssl/company-ca.pem. Для лише SSH-маршрутизаторів не потрібен.'],
+                ['key' => 'MT_SSH_USER', 'label' => 'SSH: типовий користувач', 'type' => 'text', 'group' => 'SSH — типові облікові дані', 'help' => 'Для SSH-маршрутизаторів без власного користувача. Користувач з групою vpn-portal (policy: ssh, read, write) — див. deploy/mikrotik/routeros-ssh.rsc. Без суфікса +cet: портал додає його сам.'],
+                ['key' => 'MT_SSH_PASS', 'label' => 'SSH: типовий пароль', 'type' => 'secret', 'help' => 'Для SSH-маршрутизаторів без власного пароля. Можна залишити порожнім, якщо вхід за ключем.'],
+                ['key' => 'MT_SSH_KEY', 'label' => 'SSH: приватний ключ', 'type' => 'secretarea', 'help' => 'Спільний для всіх SSH-маршрутизаторів; портал спершу пробує ключ, потім пароль. Вставте вміст файла ключа (OpenSSH / PEM: ed25519 або RSA). Відкритий ключ імпортуйте на маршрутизатор: /user ssh-keys import.'],
+                ['key' => 'MT_SSH_KEY_PASS', 'label' => 'SSH: пароль ключа', 'type' => 'secret', 'help' => 'Лише якщо ключ захищено паролем.'],
             ],
         ],
         'mail' => [
@@ -58,13 +71,19 @@ final class SettingsSchema
         ],
         'ad' => [
             'title' => 'Підключення до Active Directory',
-            'intro' => 'Лише LDAPS (порт 636) з перевіркою сертифіката контролера домену.',
+            'intro' => 'Рекомендовано LDAPS з перевіркою сертифіката. Режими без перевірки сертифіката не захищають від підміни контролера домену; без шифрування пароль передається відкритим текстом.',
             'fields' => [
-                ['key' => 'LDAP_HOSTS', 'label' => 'Контролери домену', 'type' => 'text', 'help' => 'Через кому: ldaps://dc01.company.local:636,ldaps://dc02.company.local:636'],
-                ['key' => 'LDAP_UPN_SUFFIX', 'label' => 'Суфікс UPN', 'type' => 'text', 'help' => 'Наприклад, @company.local'],
-                ['key' => 'LDAP_BASE_DN', 'label' => 'Base DN', 'type' => 'text'],
-                ['key' => 'LDAP_VPN_GROUP_DN', 'label' => 'DN групи VPN', 'type' => 'text', 'help' => 'Враховуються і вкладені групи.'],
-                ['key' => 'LDAP_CA_FILE', 'label' => 'Сертифікат CA (файл PEM)', 'type' => 'text'],
+                ['key' => 'LDAP_SECURITY', 'label' => 'Режим підключення', 'type' => 'select', 'options' => [
+                    'ldaps' => 'LDAPS (636) з перевіркою сертифіката — рекомендовано',
+                    'ldaps-insecure' => 'LDAPS (636) без перевірки сертифіката',
+                    'starttls' => 'LDAP + StartTLS (389) з перевіркою сертифіката',
+                    'starttls-insecure' => 'LDAP + StartTLS (389) без перевірки сертифіката',
+                    'plain' => 'LDAP (389) без шифрування — не рекомендовано',
+                ]],
+                ['key' => 'LDAP_HOSTS', 'label' => 'Контролери домену', 'type' => 'text', 'help' => 'Через кому. LDAPS: ldaps://dc01.company.local:636,ldaps://dc02.company.local:636; StartTLS і без шифрування: ldap://dc01.company.local:389'],
+                ['key' => 'LDAP_DOMAIN', 'label' => 'Домен', 'type' => 'text', 'help' => 'Наприклад, nerc.gov.ua. Співробітники входять як user або user@nerc.gov.ua.'],
+                ['key' => 'LDAP_VPN_GROUP', 'label' => 'Група VPN', 'type' => 'text', 'help' => 'Назва групи в AD, наприклад VPN-Users. Враховуються і вкладені групи.'],
+                ['key' => 'LDAP_CA_FILE', 'label' => 'Сертифікат CA (файл PEM)', 'type' => 'text', 'help' => 'Потрібен лише в режимах з перевіркою сертифіката.'],
             ],
         ],
         'logs' => [
@@ -110,6 +129,12 @@ final class SettingsSchema
     public static function isSecret(string $key): bool
     {
         return in_array($key, self::SECRETS, true);
+    }
+
+    /** Stored encrypted in the database (secrets and router connection parameters). */
+    public static function isEncrypted(string $key): bool
+    {
+        return self::isSecret($key) || in_array($key, self::ENCRYPTED, true);
     }
 
     /** @return Section|null */

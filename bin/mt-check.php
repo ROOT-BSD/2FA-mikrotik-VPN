@@ -26,9 +26,11 @@ if (!in_array($cmd, ['find', 'grant', 'revoke'], true) || filter_var($ip, FILTER
 try {
     switch ($cmd) {
         case 'find':
+            $lists = $c->config()->routerLists();
             foreach (RouterOsFactory::fromConfig($c->config()) as $r) {
-                $id = $r->findEntry($c->config()->get('MT_LIST'), $ip);
-                fwrite(STDOUT, sprintf("%-12s %s\n", $r->name(), $id === null ? 'absent' : "present (.id=$id)"));
+                $list = $lists[$r->name()] ?? $c->config()->get('MT_LIST');
+                $id = $r->findEntry($list, $ip);
+                fwrite(STDOUT, sprintf("%-12s %-24s %s\n", $r->name(), $list, $id === null ? 'absent' : "present (.id=$id)"));
             }
             break;
         case 'grant':

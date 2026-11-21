@@ -7,7 +7,7 @@
  * @var int $active
  * @var list<array{username: string, ip: string, granted_at: string, expires_at: string, revoked_at: string|null}> $grants
  * @var string $now
- * @var list<array{name: string, host: string, version: int, port: int}> $routers
+ * @var list<array{name: string, host: string, version: int, port: int, transport: string}> $routers
  * @var list<string> $ldapHosts
  * @var string $smtp
  * @var string $logPath
@@ -33,7 +33,7 @@ $states = ['queued' => 'у черзі', 'running' => 'виконується', '
     <section class="box">
         <h2>Підключення</h2>
         <dl class="facts">
-            <dt>MikroTik</dt><dd><?php foreach ($routers as $r): ?><?= $e($r['name']) ?> — <?= $e($r['host']) ?>:<?= $e($r['port']) ?> (v<?= $e($r['version']) ?>)<br><?php endforeach ?></dd>
+            <dt>MikroTik</dt><dd><?php foreach ($routers as $r): ?><?= $e($r['name']) ?> — <?= $e($r['host']) ?>:<?= $e($r['port']) ?> (v<?= $e($r['version']) ?>, <?= $r['transport'] === 'ssh' ? 'SSH' : 'API' ?>)<br><?php endforeach ?></dd>
             <dt>AD</dt><dd><?= $e(implode(', ', $ldapHosts)) ?></dd>
             <dt>Пошта</dt><dd><?= $smtp === '' ? 'вимкнено' : $e($smtp) ?></dd>
             <dt>Журнал</dt><dd><?= $e($logPath) ?></dd>

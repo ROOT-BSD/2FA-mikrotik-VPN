@@ -54,6 +54,9 @@ final class SettingsController extends AdminController
             if ($action === 'test') {
                 return $this->test($request, $response, $section, $admin);
             }
+            if ($action === 'lists' && $section === 'mikrotik') {
+                return $this->lists($request, $response, $admin);
+            }
             if (str_starts_with($action, 'reset:')) {
                 $key = substr($action, 6);
                 if (!in_array($key, array_column($schema['fields'], 'key'), true)) {
@@ -113,8 +116,8 @@ final class SettingsController extends AdminController
     private function test(Request $request, Response $response, string $section, string $admin): Response
     {
         $results = match ($section) {
-            'mikrotik' => $this->diagnostics->routers(),
-            'ad' => [$this->diagnostics->ldap(strtolower(trim($this->field($request, 'test_user', 64))), $this->field($request, 'test_password', 257))],
+            'mikrotik' => $this->diagnostics->routers($admin),
+            'ad' => [$this->diagnostics->ldap(\VpnGw\Auth\LdapAuthenticator::normalizeUsername($this->field($request, 'test_user', 128), $this->cfg->ldapDomain()), $this->field($request, 'test_password', 257))],
             'mail' => [$this->diagnostics->mail(trim($this->field($request, 'test_to', 254)), $admin)],
             default => [],
         };
@@ -122,6 +125,26 @@ final class SettingsController extends AdminController
             'section' => $section, 'result' => implode(',', array_map(static fn ($r) => $r['name'] . ':' . ($r['ok'] ? 'ok' : 'fail'), $results)),
         ]);
         return $this->render($response, $section, ['results' => $results]);
+    }
+
+    /**
+     * Reads the address lists from the routers and shows MT_LIST as a choice. Values typed
+     * in the other simple fields are kept on the page (not saved).
+     */
+    private function lists(Request $request, Response $response, string $admin): Response
+    {
+        $found = $this->diagnostics->addressLists();
+        $this->audit->event('admin_test', $admin, $this->remote($request), [
+            'section' => 'mikrotik_lists', 'result' => implode(',', [...array_map(static fn ($r) => "$r:ok", $found['routers']),
+                ...array_map(static fn ($e) => $e['name'] . ':fail', $found['errors'])]),
+        ]);
+        $form = [];
+        foreach ($this->body($request) as $k => $v) {
+            if (is_string($k) && is_string($v) && $k !== 'MT_LIST' && in_array($k, SettingsSchema::editableKeys(), true) && !SettingsSchema::isSecret($k)) {
+                $form[$k] = mb_substr($v, 0, 1024);
+            }
+        }
+        return $this->render($response, 'mikrotik', ['mtLists' => $found, 'form' => $form, 'results' => $found['errors'] === [] ? null : $found['errors']]);
     }
 
     /**
@@ -149,6 +172,22 @@ final class SettingsController extends AdminController
                 }
                 $plain = is_string($raw) ? mb_substr($raw, 0, 256) : '';
                 return $plain === '' ? null : $plain;
+            case 'secretarea':
+                if (($body[$key . '__clear'] ?? null) === '1') {
+                    return '';
+                }
+                $text = is_string($raw) ? trim(str_replace("\r\n", "\n", mb_substr($raw, 0, 16384))) : '';
+                return $text === '' ? null : $text . "\n";
+            case 'hostkeys':
+                return $this->readHostKeys($body);
+            case 'routerpasswords':
+                return $this->readRouterPasswords($body);
+            case 'mtlist':
+                if ($str === '__new') {
+                    $new = $body[$key . '__new'] ?? null;
+                    return is_string($new) ? trim(mb_substr($new, 0, 128)) : '';
+                }
+                return $str;
             case 'categories':
                 $picked = is_array($raw) ? array_values(array_filter($raw, 'is_string')) : [];
                 $valid = array_values(array_intersect(array_keys(SettingsSchema::LOG_CATEGORIES), [...$picked, 'admin', 'system']));
@@ -176,13 +215,32 @@ final class SettingsController extends AdminController
             }
             $port = trim(is_string($row['port'] ?? null) ? $row['port'] : '');
             $version = ($row['version'] ?? '') === '6' ? 6 : 7;
+            $transport = ($row['transport'] ?? '') === 'ssh' ? 'ssh' : 'api';
+            $user = trim(is_string($row['user'] ?? null) ? $row['user'] : '');
+            $list = trim(is_string($row['list'] ?? null) ? $row['list'] : '');
+            if ($list === '__new') {
+                $list = trim(is_string($row['list_new'] ?? null) ? $row['list_new'] : '');
+            }
+            if ($list !== '' && !preg_match('/^[A-Za-z0-9_.-]{1,64}$/', $list)) {
+                throw new ConfigException("Маршрутизатор «{$name}»: address-list — лише латиниця, цифри, _ . - (до 64 символів)");
+            }
+            if ($user !== '' && !preg_match('/^[A-Za-z0-9._@-]{1,64}$/', $user)) {
+                throw new ConfigException("Маршрутизатор «{$name}»: користувач — лише латиниця, цифри, . _ @ - (до 64 символів)");
+            }
             if (!preg_match('/^[A-Za-z0-9.-]{1,253}$/', $host)) {
                 throw new ConfigException("Маршрутизатор «{$name}»: адреса має бути IP або DNS-ім’ям");
             }
             if (!ctype_digit($port)) {
                 throw new ConfigException("Маршрутизатор «{$name}»: порт має бути числом");
             }
-            $out[] = ['name' => $name, 'host' => $host, 'version' => $version, 'port' => (int) $port];
+            $r = ['name' => $name, 'host' => $host, 'version' => $version, 'port' => (int) $port, 'transport' => $transport];
+            if ($user !== '') {
+                $r['user'] = $user;
+            }
+            if ($list !== '') {
+                $r['list'] = $list;
+            }
+            $out[] = $r;
         }
         if (count($out) > self::MAX_ROUTERS) {
             throw new ConfigException('Не більше ' . self::MAX_ROUTERS . ' маршрутизаторів');
@@ -191,6 +249,95 @@ final class SettingsController extends AdminController
             throw new ConfigException('Назви маршрутизаторів мають бути унікальними');
         }
         return json_encode($out, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * Pinned SSH host keys after this save: a key is kept only while its router keeps the
+     * same name, address and port, stays on SSH and the «скинути ключ» box is not ticked.
+     * New keys are added only by the «Перевірити MikroTik» button.
+     *
+     * @param array<string, mixed> $body
+     */
+    private function readHostKeys(array $body): string
+    {
+        $old = [];
+        foreach ($this->cfg->routers() as $r) {
+            $old[$r['name']] = $r;
+        }
+        $reset = [];
+        foreach (is_array($body['routers'] ?? null) ? $body['routers'] : [] as $row) {
+            if (is_array($row) && ($row['reset_key'] ?? null) === '1' && is_string($row['name'] ?? null)) {
+                $reset[] = trim($row['name']);
+            }
+        }
+        $new = [];
+        foreach ((array) json_decode($this->readRouters($body), true) as $r) {
+            if (is_array($r) && is_string($r['name'] ?? null)) {
+                $new[$r['name']] = $r;
+            }
+        }
+        $keep = [];
+        foreach ($this->cfg->sshHostKeys() as $name => $fp) {
+            $n = $new[$name] ?? null;
+            $o = $old[$name] ?? null;
+            if ($n !== null && $o !== null && !in_array($name, $reset, true) && $n['transport'] === 'ssh'
+                && $n['host'] === $o['host'] && $n['port'] === $o['port']) {
+                $keep[$name] = $fp;
+            }
+        }
+        return $keep === [] ? '{}' : json_encode($keep, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * Per-router passwords after this save (write-only: never sent to the browser).
+     * A typed password replaces the stored one, «очистити» removes it (the router then uses
+     * the common password of its protocol). A stored password follows its row (hidden
+     * «orig» name, so renaming keeps it) but is not reused when the router's address or
+     * port changes: the administrator has to type it again, so a typo in the address does
+     * not send the password to another host.
+     *
+     * @param array<string, mixed> $body
+     */
+    private function readRouterPasswords(array $body): string
+    {
+        $old = [];
+        foreach ($this->cfg->routers() as $r) {
+            $old[$r['name']] = $r;
+        }
+        $stored = [];
+        foreach ($this->cfg->routersWithOwnPassword() as $n) {
+            $stored[$n] = $this->cfg->routerCredentials($old[$n])['password'];
+        }
+        $out = [];
+        foreach (array_slice(is_array($body['routers'] ?? null) ? $body['routers'] : [], 0, self::MAX_ROUTERS + 2) as $row) {
+            if (!is_array($row) || ($row['delete'] ?? null) === '1') {
+                continue;
+            }
+            $name = trim(is_string($row['name'] ?? null) ? $row['name'] : '');
+            $host = trim(is_string($row['host'] ?? null) ? $row['host'] : '');
+            $port = trim(is_string($row['port'] ?? null) ? $row['port'] : '');
+            if ($name === '' || !preg_match('/^[A-Za-z0-9_-]{1,32}$/', $name)) {
+                continue; // readRouters reports a bad row
+            }
+            $typed = is_string($row['password'] ?? null) ? mb_substr($row['password'], 0, 256) : '';
+            if (($row['clear_password'] ?? null) === '1') {
+                continue;
+            }
+            if ($typed !== '') {
+                $out[$name] = $typed;
+                continue;
+            }
+            $orig = is_string($row['orig'] ?? null) ? $row['orig'] : '';
+            if (!isset($stored[$orig], $old[$orig])) {
+                continue;
+            }
+            if ($old[$orig]['host'] !== $host || (string) $old[$orig]['port'] !== $port) {
+                throw new ConfigException("Маршрутизатор «{$name}»: адресу або порт змінено — введіть його пароль ще раз (або позначте «типовий»)");
+            }
+            $out[$name] = $stored[$orig];
+        }
+        ksort($out);
+        return $out === [] ? '{}' : json_encode($out, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     }
 
     /**
@@ -221,6 +368,19 @@ final class SettingsController extends AdminController
                 throw new ConfigException('LOG_PATH: каталог ' . dirname($path) . ' не існує або недоступний для запису (запустіть install.sh)');
             }
         }
+        if ((in_array('MT_SSH_KEY', $changed, true) || in_array('MT_SSH_KEY_PASS', $changed, true)) && $c->get('MT_SSH_KEY') !== '') {
+            try {
+                $pass = $c->get('MT_SSH_KEY_PASS');
+                $key = $pass === ''
+                    ? \phpseclib3\Crypt\PublicKeyLoader::loadPrivateKey($c->get('MT_SSH_KEY'))
+                    : \phpseclib3\Crypt\PublicKeyLoader::loadPrivateKey($c->get('MT_SSH_KEY'), $pass);
+            } catch (\Throwable) {
+                $key = null;
+            }
+            if (!$key instanceof \phpseclib3\Crypt\Common\PrivateKey) {
+                throw new ConfigException('SSH: приватний ключ не читається (формат або пароль ключа)');
+            }
+        }
         if ($c->bool('BACKUP_ENABLED') && $c->get('BACKUP_PASSPHRASE') === '') {
             throw new ConfigException('Для автоматичного копіювання задайте пароль шифрування копій');
         }
@@ -229,14 +389,29 @@ final class SettingsController extends AdminController
     /** Human-readable Ukrainian text for the most common validation messages. */
     private static function explain(string $msg): string
     {
+        $router = preg_match('/: ([A-Za-z0-9_-]{1,32})(?: has no own user)?$/', $msg, $m) === 1
+            && (str_starts_with($msg, 'Missing required setting MT_USER') || str_starts_with($msg, 'MT_SSH_USER') || str_starts_with($msg, 'SSH routers need'))
+            ? " (маршрутизатор «{$m[1]}»)" : '';
         $map = [
-            'ROUTERS[' => 'Маршрутизатори: потрібні назва (латиниця, цифри, _ -), адреса, версія 6 або 7 і порт 1–65535',
+            'ROUTERS[' => 'Маршрутизатори: потрібні назва (латиниця, цифри, _ -), адреса, версія 6 або 7, протокол і порт 1–65535',
+            'Missing required setting MT_USER' => 'Для маршрутизатора з протоколом API задайте власного користувача або «API: типовий користувач»',
+            'Missing required setting MT_CA_FILE' => 'Для маршрутизаторів з протоколом API вкажіть «API: сертифікат CA»',
+            'MT_SSH_USER is required' => 'Для маршрутизатора з протоколом SSH задайте власного користувача або «SSH: типовий користувач»',
+            'SSH routers need' => 'Для SSH-маршрутизатора задайте власний пароль, «SSH: типовий пароль» або приватний ключ',
+            'ROUTER_PASSWORDS' => 'Паролі маршрутизаторів: некоректне значення',
+            'MT_SSH_KEY must be' => 'SSH: вставте приватний ключ повністю (рядки BEGIN … PRIVATE KEY … END)',
+            'Missing required setting LDAP_CA_FILE' => 'У режимі з перевіркою сертифіката потрібен «Сертифікат CA»',
+            'LDAP_SECURITY' => 'Недопустимий режим підключення LDAP',
             'ROUTERS must be a non-empty' => 'Додайте хоча б один маршрутизатор',
             'Missing required setting' => 'Заповніть обов’язкове поле: ' . substr($msg, strlen('Missing required setting ')),
-            'LDAP_HOSTS:' => 'Контролери домену: лише адреси ldaps://',
+            'LDAP_HOSTS:' => 'Контролери домену: для режимів LDAPS — адреси ldaps://, для StartTLS і без шифрування — ldap://',
             'MT_TIMEOUT' => 'Тривалість доступу: формат ГГ:ХХ:СС, наприклад 10:00:00',
+            'PRIVATE_CLIENT_NETWORKS:' => 'Приватні мережі: CIDR через кому, наприклад 172.20.2.0/23 (не ширше /8)',
             'MT_LIST' => 'Address-list: лише латиниця, цифри, _ . -',
-            'LDAP_UPN_SUFFIX' => 'Суфікс UPN має виглядати як @company.local',
+            'LDAP_DOMAIN is required' => 'Вкажіть домен, наприклад nerc.gov.ua',
+            'LDAP_DOMAIN must' => 'Домен має виглядати як nerc.gov.ua',
+            'LDAP_VPN_GROUP is required' => 'Вкажіть назву групи VPN, наприклад VPN-Users',
+            'LDAP_VPN_GROUP:' => 'Назва групи: літери, цифри, пробіл, _ . -',
             'SMTP_FROM' => 'Адреса відправника має бути e-mail',
             'SMTP_HOST' => 'SMTP-сервер: ім’я хоста або IP-адреса',
             'LOG_REMOTE' => 'Віддалений syslog: хост:порт, наприклад siem.company.local:514',
@@ -244,7 +419,7 @@ final class SettingsController extends AdminController
         ];
         foreach ($map as $prefix => $text) {
             if (str_starts_with($msg, $prefix)) {
-                return $text;
+                return $text . $router;
             }
         }
         return $msg;
@@ -277,6 +452,9 @@ final class SettingsController extends AdminController
             'routers' => is_array($routers) ? $routers : [],
             'categories' => SettingsSchema::LOG_CATEGORIES,
             'meta' => $this->store->meta(),
+            'hostKeys' => $this->cfg->sshHostKeys(),
+            'ownPasswords' => $this->cfg->routersWithOwnPassword(),
+            'commonUsers' => ['api' => $this->cfg->get('MT_USER'), 'ssh' => $this->cfg->get('MT_SSH_USER')],
         ], $status);
     }
 }

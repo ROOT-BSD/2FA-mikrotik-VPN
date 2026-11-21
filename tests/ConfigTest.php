@@ -35,7 +35,7 @@ final class ConfigTest extends TestCase
     {
         return [
             'missing key' => ['MT_USER', ''],
-            'missing ldap base' => ['LDAP_BASE_DN', ' '],
+            'missing domain' => ['LDAP_UPN_SUFFIX', ''],
             'bad upn suffix' => ['LDAP_UPN_SUFFIX', 'company.local'],
             'smtp port text' => ['SMTP_PORT', 'smtp'],
             'smtp port range' => ['SMTP_PORT', '70000'],

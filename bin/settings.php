@@ -45,8 +45,8 @@ try {
     exit(1);
 }
 if ($cmd === 'effective') {
-    foreach (['MT_PASS', 'LDAP_HOSTS', 'LDAP_UPN_SUFFIX', 'LDAP_BASE_DN', 'LDAP_VPN_GROUP_DN', 'LDAP_CA_FILE', 'MT_CA_FILE',
-        'ROUTERS', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_CA_FILE', 'APP_BASE_PATH', 'DB_PATH', 'LOG_PATH'] as $key) {
+    foreach (['MT_PASS', 'LDAP_HOSTS', 'LDAP_DOMAIN', 'LDAP_VPN_GROUP', 'LDAP_CA_FILE', 'LDAP_SECURITY', 'MT_CA_FILE',
+        'ROUTERS', 'MT_SSH_HOSTKEYS', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_CA_FILE', 'APP_BASE_PATH', 'DB_PATH', 'LOG_PATH'] as $key) {
         // MT_PASS is only reported as set / empty
         $v = $key === 'MT_PASS' ? ($cfg->get($key) === '' ? '' : 'set') : $cfg->get($key);
         fwrite(STDOUT, $key . '=' . str_replace(["\r", "\n"], ' ', $v) . "\n");

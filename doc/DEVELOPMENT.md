@@ -1,6 +1,6 @@
 # VPN-GW: посібник розробника
 
-**Версія документа 4.0 · 15.11.2026 · відповідає коду VPN-GW 0.2** · Супровідні документи: `INSTALL_GUIDE.md` (встановлення), `ADMIN_GUIDE.md` (панель адміністратора), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд), `CHANGELOG.md`
+**Версія документа 5.0 · 21.11.2026 · відповідає коду VPN-GW 0.7** · Супровідні документи: `INSTALL_GUIDE.md` (встановлення), `ADMIN_GUIDE.md` (панель адміністратора), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд), `CHANGELOG.md`
 
 Документ описує архітектуру і внутрішню будову реалізованого порталу: де що лежить, як працює кожен модуль, які рішення безпеки закладено і як вносити зміни. Код — у репозиторії; тут лише ключові фрагменти.
 
@@ -14,7 +14,7 @@
 2. ввів код Microsoft Authenticator (TOTP; резервно — код на пошту з AD, вимкнено за замовчуванням);
 3. звертається з валідної публічної IPv4.
 
-IP додається у `/ip firewall address-list` (список `MT_LIST`, timeout `MT_TIMEOUT`, за замовчуванням 10 год) **на всіх** маршрутизаторах з `ROUTERS`: RouterOS 7 — через REST API, RouterOS 6 — через API-SSL.
+IP додається у `/ip firewall address-list` (список `MT_LIST`, timeout `MT_TIMEOUT`, за замовчуванням 10 год) **на всіх** маршрутизаторах з `ROUTERS`. Протокол — для кожного маршрутизатора: API (RouterOS 7 — REST, RouterOS 6 — API-SSL) або SSH (RouterOS 6 і 7).
 
 ---
 
@@ -53,7 +53,8 @@ src/
   Auth/                    Authenticator (інтерфейс), LdapAuthenticator, AuthResult, TotpService, EmailOtp
   Security/                ClientIp, Cidr, Crypto, RateLimiter
   RouterOs/                RouterOsClient (інтерфейс), RestClientV7, ApiSslClientV6,
-                           RouterOsFactory, AccessGranter, RouterOsException
+                           SshClient + SshSession / PhpseclibSession (SSH),
+                           RouterOsFactory, AccessGranter, AddressLists, RouterOsException
   Http/                    Controller (база), LoginController, MfaController, ResultController,
                            EnrollController, Session, View
   Http/Middleware/         SecurityHeaders, Csrf, InternalNetworkOnly
@@ -91,9 +92,18 @@ Webroot — лише `public/`. `src/`, `.env`, `vendor/`, `/var/lib/vpn-gw` з�
 | `APP_BASE_PATH` | `/[A-Za-z0-9_-]{1,64}` — шлях порталу; має збігатися з віртуальним хостом |
 | `APP_KEY`, `APP_HMAC_KEY` | `base64:` + рівно 32 байти |
 | `TRUSTED_PROXIES` | список IP (для Apache без балансувальника — `127.0.0.1`) |
+| `PRIVATE_CLIENT_NETWORKS` | IPv4 CIDR (не ширше /8), де приватні адреси клієнтів дозволені для входу й address-list; за замовчуванням порожньо |
 | `INTERNAL_NETWORKS` | список IPv4 CIDR, звідки дозволено `/enroll` і `/admin` |
-| `LDAP_HOSTS` | лише `ldaps://…`; декілька — через кому (перебираються, якщо DC недоступний) |
-| `ROUTERS` | JSON-масив `{name, host, version, port}`, version — 6 або 7; у `.env` — **в одинарних лапках** |
+| `LDAP_SECURITY` | один з: `ldaps` (за замовчуванням), `ldaps-insecure`, `starttls`, `starttls-insecure`, `plain` |
+| `LDAP_HOSTS` | `ldaps://хост[:порт]` для режимів `ldaps*`, `ldap://хост[:порт]` для інших; декілька — через кому (перебираються, якщо DC недоступний) |
+| `LDAP_CA_FILE` | обов'язковий лише для `ldaps` і `starttls` |
+| `ROUTERS` | JSON-масив `{name, host, version, port, transport}`; version — 6 або 7, transport — `api` (за замовчуванням) або `ssh`; у `.env` — **в одинарних лапках** |
+| `ROUTERS[].list` | власний address-list маршрутизатора (`[A-Za-z0-9_.-]{1,64}`, необов'язково); порожньо — `MT_LIST`. `Config::routerList($router)`, `Config::routerLists()`; `AccessGranter` отримує мапу «маршрутизатор → список» |
+| `ROUTERS[].user` | власний користувач маршрутизатора (`[A-Za-z0-9._@-]{1,64}`, необов'язково); порожньо — типовий користувач протоколу |
+| `ROUTER_PASSWORDS` | секрет, JSON `{"назва": "пароль"}`: власні паролі маршрутизаторів; записи для неіснуючих маршрутизаторів ігноруються. `Config::routerCredentials($router)` повертає власні або типові облікові дані |
+| `MT_USER`, `MT_PASS`, `MT_CA_FILE` | типові облікові дані для `transport=api`; `MT_CA_FILE` обов'язковий, якщо є API-маршрутизатори; `MT_USER` — якщо є API-маршрутизатор без власного користувача |
+| `MT_SSH_USER`, `MT_SSH_PASS`, `MT_SSH_KEY`, `MT_SSH_KEY_PASS` | типові облікові дані для `transport=ssh`: кожен SSH-маршрутизатор повинен мати користувача (власного або типового) і пароль (власний або типовий) чи спільний ключ |
+| `MT_SSH_HOSTKEYS` | JSON `{"назва": "SHA256:…"}` — підтверджені ключі хостів; ведеться панеллю |
 | `MT_LIST` | `[A-Za-z0-9_.-]{1,64}` |
 | `MT_TIMEOUT` | `HH:MM:SS` |
 | `RATE_*` | `N/секунд`, напр. `5/900` |
@@ -106,7 +116,10 @@ Webroot — лише `public/`. `src/`, `.env`, `vendor/`, `/var/lib/vpn-gw` з�
 | `LOG_SYSLOG`, `LOG_SYSLOG_FACILITY`, `LOG_REMOTE` | `true/false`, `local0`–`local7`, `хост:порт` (UDP) |
 | `LOG_RETENTION_DAYS` | 1–3650 (агент пише в `/etc/logrotate.d/vpn-gw`) |
 | `BACKUP_ENABLED`, `BACKUP_HOUR`, `BACKUP_KEEP`, `BACKUP_PASSPHRASE` | `true/false`, 0–23, 1–365, ≥ 12 символів |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `LDAP_UPN_SUFFIX` | ім'я хоста, 1–65535, e-mail, `@домен`; без керувальних символів |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` | ім'я хоста, 1–65535, e-mail; без керувальних символів |
+| `LDAP_DOMAIN` | DNS-домен AD (`nerc.gov.ua`); з нього: логін для bind `user@домен`, база пошуку `DC=nerc,DC=gov,DC=ua` |
+| `LDAP_VPN_GROUP` | назва групи VPN (`[A-Za-z0-9 _.-]`), DN знаходиться після bind пошуком групи за `sAMAccountName` або `cn` |
+| `LDAP_UPN_SUFFIX`, `LDAP_BASE_DN`, `LDAP_VPN_GROUP_DN` | застарілі (0.1–0.3): діють лише якщо `LDAP_DOMAIN` / `LDAP_VPN_GROUP` порожні |
 | `DATA_DIR`, `AGENT_DIR`, `BACKUP_DIR` | каталоги застосунку, агента і копій (змінюються разом з `install.sh`) |
 
 ---
@@ -157,12 +170,15 @@ awaiting_2fa ──POST /verify (код ok, grant ok)──► granted (TTL 600 
 ## 5. Модулі
 
 ### 5.1. `Security\ClientIp`
-`X-Forwarded-For` враховується лише якщо `REMOTE_ADDR` ∈ `TRUSTED_PROXIES`, береться крайнє праве значення. Результат — **одна публічна IPv4** (`FILTER_FLAG_IPV4 | NO_PRIV_RANGE | NO_RES_RANGE`), інакше `null` і відмова. Apache додатково видаляє клієнтський XFF (`RequestHeader unset … early`).
+`X-Forwarded-For` враховується лише якщо `REMOTE_ADDR` ∈ `TRUSTED_PROXIES`, береться крайнє праве значення. Результат — **одна IPv4**: публічна (`FILTER_FLAG_IPV4 | NO_PRIV_RANGE | NO_RES_RANGE`) або приватна з `PRIVATE_CLIENT_NETWORKS` (`ClientIp::isAcceptable`, loopback і 0.0.0.0/8 — ніколи), інакше `null` і відмова; `AccessGranter` перевіряє те саме. Apache додатково видаляє клієнтський XFF (`RequestHeader unset … early`).
 
 ### 5.2. `Auth\LdapAuthenticator`
 - До будь-якого виклику LDAP: логін `^[A-Za-z0-9._-]{1,64}$`, пароль непорожній і ≤ 256 символів (порожній пароль = анонімний bind, який AD підтверджує).
-- Для кожного хоста: `LDAP_OPT_X_TLS_REQUIRE_CERT = DEMAND`, CA з `LDAP_CA_FILE`, таймаути 5 с; `LDAP_OPT_X_TLS_NEWCTX` — якщо константа є (Debian/OpenLDAP).
-- Bind `логін@UPN_SUFFIX`; `errno -1` (сервер недоступний) → наступний DC.
+- Режим `LDAP_SECURITY` → `LdapAuthenticator::tlsOptions()`: `ldaps` / `starttls` — `LDAP_OPT_X_TLS_REQUIRE_CERT = DEMAND`, CA з `LDAP_CA_FILE`; `*-insecure` — `REQUIRE_CERT = NEVER` (шифрування без перевірки сертифіката); `plain` — без TLS. Опції застосовуються до з'єднання через `LDAP_OPT_X_TLS_NEWCTX` (якщо константа є — Debian/OpenLDAP). Таймаути 5 с.
+- `starttls*`: `ldap_start_tls()` після налаштування; якщо не вдалося — наступний DC, **ніколи** не bind без TLS.
+- Логін: `user` або `user@<LDAP_DOMAIN>` → `normalizeUsername()` (до лімітів спроб, тож обидві форми мають спільний лічильник); інший домен — відмова.
+- Bind `логін@домен`; `errno -1` (сервер недоступний) → наступний DC.
+- Група: DN знаходиться за назвою (`sAMAccountName` або `cn`, рівно один результат) від імені користувача; не знайдено — `group_not_found`.
 - Пошук з фільтром: `sAMAccountName`, `memberOf:1.2.840.113556.1.4.1941:=<група>` (вкладені групи), `!(userAccountControl:1.2.840.113556.1.4.803:=2)` (не вимкнений); перевірка `accountExpires` (FILETIME).
 - Повертає `AuthResult` з причиною для журналу (`invalid_input | bad_credentials | not_allowed | expired | ldap_unavailable`); користувач завжди бачить «Невірні облікові дані».
 
@@ -196,6 +212,8 @@ interface RouterOsClient {
     public function updateEntry(string $id, string $timeout, string $comment): void;
     public function removeEntry(string $id): void;
     public function dropSessions(string $username, string $ip): void; // PPP active + IPsec active-peers
+    /** @return array<string, array{entries: int, rules: int}> — лише для панелі (вибір MT_LIST) */
+    public function addressLists(): array;
 }
 ```
 
@@ -206,9 +224,24 @@ interface RouterOsClient {
 | update | `PATCH …/address-list/<.id>` | `…/set =.id=` |
 | remove | `DELETE …/address-list/<.id>` | `…/remove =.id=` |
 | drop | `/ppp/active?name=` + `/ip/ipsec/active-peers?remote-address=` → `DELETE` | те саме через `print` + `remove` |
+| lists | `GET …/address-list?.proplist=list` + `GET /ip/firewall/{filter,nat,mangle,raw}?.proplist=src-address-list,dst-address-list` | те саме через `print =.proplist=` |
 
-- **Жодних CLI-рядків**: REST — JSON; API — кожне значення окреме слово (`ApiSslClientV6::query()`), керувальні символи вирізаються.
+`SshClient::addressLists()` виконує фіксований скрипт `SshClient::LISTS_SCRIPT` (без зовнішніх значень): записи рахуються на маршрутизаторі (асоціативний масив), посилання з правил виводяться рядками `R <назва>`, кінець — `END`; без `END` відповідь вважається помилкою. `AddressLists::build()` об'єднує результат, знімає `!` (заперечення) і відкидає назви, що не підходять для `MT_LIST`. Панель: `Diagnostics::addressLists()` → дія `lists` у `SettingsController` → поле типу `mtlist` (select + «Новий список»).
+
+- **API — жодних CLI-рядків**: REST — JSON; API-SSL — кожне значення окреме слово (`ApiSslClientV6::query()`), керувальні символи вирізаються.
 - TLS: REST — `CURLOPT_SSL_VERIFYPEER/HOST`, `CAINFO = MT_CA_FILE`, без проксі; API-SSL — **бібліотека за замовчуванням використовує анонімні шифри `ADH:ALL` без перевірки сертифіката**; клієнт явно задає `ciphers=HIGH:!aNULL…`, `verify_peer`, `verify_peer_name`, `cafile`. Сертифікат маршрутизатора має містити його IP у SAN.
+- **SSH (`SshClient`)** — консольні команди через exec-канал (phpseclib 3, `PhpseclibSession`):
+
+  | Операція | Команда |
+  |---|---|
+  | find | `:put [:tostr [/ip firewall address-list find list="L" address="IP"]]` → `*1A` / `*1A;*1B` / порожньо |
+  | add | `/ip firewall address-list add list="L" address="IP" timeout=HH:MM:SS comment="…"` |
+  | update | `/ip firewall address-list set *ID timeout=… comment="…"` |
+  | remove | `/ip firewall address-list remove *ID` |
+  | drop | `/ppp active remove [find name="U"]`, `/ip ipsec active-peers remove [find remote-address=IP]` |
+
+  Значення **не екрануються, а перевіряються за білим списком** (`list`/`user` — `[A-Za-z0-9_.-]`, коментар — `[A-Za-z0-9 _.:-]`, IP — IPv4, timeout — `\d{1,3}:\d\d:\d\d`, id — `\*[0-9A-F]+`); інакше `RouterOsException` і команда не надсилається. Будь-який вивід команд add/set/remove — повідомлення про помилку RouterOS. До логіна додається `+cet` (без кольорів і визначення терміналу).
+- **Ключ хоста SSH**: `hostKeyFingerprint()` (SHA-256, як `ssh-keygen -lf`) перевіряється **до** входу. Немає збереженого ключа → відмова (портал); `RouterOsFactory::fromConfig($cfg, trustOnFirstUse: true)` — лише для кнопки «Перевірити MikroTik», яка показує і зберігає відбиток у `MT_SSH_HOSTKEYS`. Ключ не збігається → відмова «host key CHANGED». Зміна адреси/порту або «скинути» в панелі видаляє збережений ключ (`SettingsController::readHostKeys`).
 - `AccessGranter::grant` — під `flock()`; для кожного маршрутизатора: знайти → оновити timeout або додати. Помилка одного маршрутизатора не зупиняє інші; наприкінці — `RouterOsException` (користувач бачить «Тимчасова помилка»), подробиці — подія `mt_error`. Записує видачу в таблицю `grants`.
 - `revoke` — видаляє запис, розриває PPP-сесію і IPsec active-peer (видалення запису саме по собі вже встановлений тунель не рве).
 - Коментар у MikroTik: `User: <лише [A-Za-z0-9._-]> via VPN-2FA`. IP перед записом перевіряється ще раз (публічна IPv4).
@@ -313,7 +346,8 @@ composer install && composer test && composer stan && composer audit
 |---|---|
 | `Security/*` | ClientIp (підробка XFF, CIDR, IPv6, ін'єкція), Cidr, Crypto (підробка шифротексту, чужий ключ), RateLimiter (вікно, блокування переживає нову сесію) |
 | `Auth/*` | TOTP (сумісність URI з MS Authenticator, повтор коду, дрейф ±1/±2, пробіли), Email OTP, вхідні дані LDAP (ін'єкції, порожній пароль), `accountExpires` |
-| `RouterOs/*` | add/update без дублікатів, revoke + drop, збій одного маршрутизатора, відмова для приватних IP, санітизація коментаря, API-слова |
+| `RouterOs/*` | add/update без дублікатів, revoke + drop, збій одного маршрутизатора, відмова для приватних IP, санітизація коментаря, API-слова; SSH: точні команди, розбір відповіді, 9 спроб ін'єкції (відмова без надсилання), незатверджений і змінений ключ хоста (пароль не надсилається), TOFU, відбиток = `ssh-keygen -lf` |
+| `Settings/ConnectionSettingsTest` | режими LDAP (схеми, CA лише з перевіркою), вимоги для API- і SSH-маршрутизаторів, шифрування параметрів підключення, міграція відкритих значень 0.2, TLS-опції LDAP за режимом |
 | `ConfigTest` | fail closed на 33 типах некоректних значень |
 | `Settings/*` | пріоритет панелі, заборона ключів доступу з панелі, шифрування секретів, `Config::load` з БД, зміна `APP_KEY` = помилка |
 | `Admin/AdminPanelTest` | панель через Slim: 404 ззовні (зокрема `%61dmin`), вхід, блокування, CSRF, прив'язка до IP і тайм-аут, зміна пароля, збереження / відмова / очищення секретів / скидання до `.env`, кнопки перевірки, фільтри журналу, черга копій, завантаження копії, перевірки архіву оновлення |
@@ -322,7 +356,7 @@ composer install && composer test && composer stan && composer audit
 | `AppTest` | наскрізні сценарії через Slim: 404-маскування, заголовки, CSRF, повний вхід і відкликання, блокування після 3 кодів, блокування до AD, прив'язка до IP, TTL, реєстрація з офісу, `/enroll` ззовні = 404, екранування |
 | `VersionTest` | `VERSION` = `Version::CURRENT` = `composer.json` |
 
-Інтеграційні перевірки проти реальних AD і MikroTik — на тестовому стенді: `install.sh` (розділ «Зв'язок»), кнопки «Перевірити» в панелі і `bin/mt-check.php`. Агент перевірено від root на Linux: копія → `restore.php --apply`, оновлення (успіх, помилка інсталятора з відкатом, недійсна перевірка, повторна версія, підмінений архів), завантаження релізу через браузер.
+Інтеграційні перевірки проти реальних AD і MikroTik — на тестовому стенді: `install.sh` (розділ «Зв'язок»), кнопки «Перевірити» в панелі і `bin/mt-check.php`. SSH перевірено проти справжнього OpenSSH-сервера з емулятором консолі RouterOS: підтвердження ключа кнопкою, видача / продовження / відкликання доступу, вхід паролем і ключем ed25519, хибний пароль, підмінений ключ хоста (жодної команди на «чужому» сервері). Агент перевірено від root на Linux: копія → `restore.php --apply`, оновлення (успіх, помилка інсталятора з відкатом, недійсна перевірка, повторна версія, підмінений архів), завантаження релізу через браузер.
 
 ---
 
@@ -341,7 +375,7 @@ composer install && composer test && composer stan && composer audit
 ## 10. Як вносити зміни
 
 - Новий маршрут — метод контролера + рядок у `App::create`; POST-форми мають містити поле `csrf`.
-- Новий параметр `.env` — у `Config` (`REQUIRED` або `DEFAULTS` + валідація), `.env.example`, тест у `ConfigTest`. Якщо його треба редагувати в панелі — поле в `SettingsSchema::SECTIONS` (секрет — також у `SECRETS`), за потреби перевірка в `SettingsController::panelChecks`.
+- Новий параметр `.env` — у `Config` (`REQUIRED` або `DEFAULTS` + валідація), `.env.example`, тест у `ConfigTest`. Якщо його треба редагувати в панелі — поле в `SettingsSchema::SECTIONS`; секрет (не показується в браузері) — у `SECRETS`, параметр, що має зберігатися зашифрованим, але показуватися, — у `ENCRYPTED`; за потреби перевірка в `SettingsController::panelChecks`.
 - Нова сторінка панелі — контролер у `Http/Admin` (наслідує `AdminController`, обгортка `guarded()`), маршрут під `/admin`, шаблон `admin_*.php`, пункт меню в `admin_layout.php`.
 - Нова дія агента — лише фіксована операція в `Agent`, тип у `Jobs::TYPES`; дані із завдання вважати недовіреними.
 - Нова операція на MikroTik — метод у `RouterOsClient` і обох реалізаціях, `FakeRouter` у тестах.
@@ -355,6 +389,8 @@ composer install && composer test && composer stan && composer audit
 ## 12. Відомі обмеження і відкриті питання
 
 - Лише IPv4.
+- SSH-команди перевірено на емуляторі консолі RouterOS, не на справжньому маршрутизаторі: перед запуском — `mt-check` на тестовому CHR 6 і 7 (особливо `find` за `address` і `active-peers` у RouterOS 6).
+- Режими LDAP без перевірки сертифіката і без шифрування — компроміс безпеки; панель і `install.sh` про них попереджають.
 - Адміністратори панелі — лише локальні облікові записи, без другого фактора (вхід лише з внутрішньої мережі). Можливий розвиток: TOTP для адміністраторів або вхід через групу AD.
 - Оновлення через веб перевіряє цілісність (SHA-256), а не автора релізу; підпис — у планах.
 - Відновлення з резервної копії — лише з командного рядка (свідомо: це дія з найбільшими наслідками).

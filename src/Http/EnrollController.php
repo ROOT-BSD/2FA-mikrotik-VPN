@@ -11,6 +11,7 @@ use Psr\Clock\ClockInterface;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use VpnGw\Auth\Authenticator;
+use VpnGw\Auth\LdapAuthenticator;
 use VpnGw\Auth\TotpService;
 use VpnGw\Config;
 use VpnGw\Log\AuditLogger;
@@ -56,7 +57,7 @@ final class EnrollController extends Controller
 
     private function login(Request $request, Response $response, string $ip): Response
     {
-        $user = strtolower(trim($this->field($request, 'username', 64)));
+        $user = LdapAuthenticator::normalizeUsername($this->field($request, 'username', 128), $this->cfg->ldapDomain());
         if ($this->limiter->isLocked("ip:$ip") || ($user !== '' && $this->limiter->isLocked("user:$user"))) {
             return $this->view->render($response, 'enroll_login', ['error' => LoginController::MSG_LOCKED], 429);
         }

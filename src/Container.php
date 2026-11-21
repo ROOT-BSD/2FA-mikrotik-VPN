@@ -87,10 +87,11 @@ final class Container
     {
         return $this->get(__FUNCTION__, fn () => new LdapAuthenticator(
             $this->cfg->list('LDAP_HOSTS'),
-            $this->cfg->get('LDAP_UPN_SUFFIX'),
-            $this->cfg->get('LDAP_BASE_DN'),
-            $this->cfg->get('LDAP_VPN_GROUP_DN'),
+            $this->cfg->ldapUpnSuffix(),
+            $this->cfg->ldapBaseDn(),
+            $this->cfg->ldapGroupDn() ?? (string) $this->cfg->ldapGroupName(),
             $this->cfg->get('LDAP_CA_FILE'),
+            $this->cfg->get('LDAP_SECURITY'),
         ), Authenticator::class);
     }
 
@@ -188,7 +189,7 @@ final class Container
 
     public function diagnostics(): Diagnostics
     {
-        return $this->get(__FUNCTION__, fn () => new Diagnostics($this->cfg, $this->authenticator(), $this->notifier()), Diagnostics::class);
+        return $this->get(__FUNCTION__, fn () => new Diagnostics($this->cfg, $this->authenticator(), $this->notifier(), $this->settingsStore(), $this->clock()->now()), Diagnostics::class);
     }
 
     public function adminAuthController(): AdminAuthController

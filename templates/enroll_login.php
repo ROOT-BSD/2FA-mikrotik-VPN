@@ -21,7 +21,7 @@ $error ??= null;
     <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
     <input type="hidden" name="action" value="login">
     <label for="username">Доменний логін</label>
-    <input id="username" name="username" required maxlength="64" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <input id="username" name="username" required maxlength="128" autocapitalize="none" autocorrect="off" spellcheck="false">
     <label for="password">Пароль</label>
     <input id="password" name="password" type="password" required maxlength="256">
     <button type="submit">Показати QR-код</button>

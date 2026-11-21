@@ -15,7 +15,7 @@ $error ??= null;
 <form method="post" action="<?= $e($base) ?>/login" autocomplete="off" novalidate>
     <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
     <label for="username">Доменний логін</label>
-    <input id="username" name="username" required maxlength="64" autocapitalize="none" autocorrect="off"
+    <input id="username" name="username" required maxlength="128" autocapitalize="none" autocorrect="off"
            spellcheck="false" pattern="[A-Za-z0-9._\-]+" placeholder="ivanenko">
     <label for="password">Пароль</label>
     <input id="password" name="password" type="password" required maxlength="256" autocomplete="current-password">

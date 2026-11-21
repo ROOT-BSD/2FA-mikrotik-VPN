@@ -127,7 +127,7 @@ form.inline { display: inline; margin: 0; }
 select { width: 100%; padding: 11px 12px; border: 1px solid #cbd2d9; border-radius: 8px; font: inherit; background: #fff; }
 .routers input, .routers select { padding: 8px 10px; }
 .routers .w-port { width: 90px; }
-.routers select { min-width: 132px; }
+.routers select { min-width: 0; width: auto; }
 .panel a:not(.btn-small):not(.button-link) { color: var(--brand-2); }
 label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 6px 0; }
 label.check input { width: auto; }
@@ -162,3 +162,44 @@ pre.log-output { max-height: 520px; overflow-y: auto; }
     .sidenav a, .sidenav a.sub { border-left: 0; padding: 6px 10px; }
     .panel { padding: 16px; }
 }
+.form h2.group { margin: 26px 0 0; padding-top: 6px; font-size: 1rem; color: var(--brand); border-top: 2px solid var(--line); }
+.form textarea { width: 100%; padding: 10px 12px; border: 1px solid #cbd2d9; border-radius: 8px; font: .85rem/1.4 ui-monospace, Consolas, monospace; resize: vertical; }
+.routers td.fp { white-space: nowrap; font-size: .8rem; }
+.routers td.fp code { font-size: .75rem; }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+
+/* 0.3: wider settings form for the routers table */
+.form { max-width: 1020px; }
+.field > input, .field > select, .field > textarea, .field > .help, .field > .checklist { max-width: 760px; }
+.routers td { padding: 6px 4px; }
+.routers th { padding: 8px 4px; }
+.routers input[name$="[name]"] { width: 110px; }
+.routers input[name$="[host]"] { width: 210px; }
+.routers .w-port { width: 70px; }
+.field button.link.small { display: block; }
+
+/* 0.5: per-router user and password */
+.routers input[name$="[name]"] { width: 88px; }
+.routers input[name$="[host]"] { width: 140px; }
+.routers .w-port { width: 58px; }
+.routers .w-user { width: 112px; }
+.routers .w-pass { width: 104px; }
+.routers td.pw { white-space: nowrap; }
+.routers td.pw label.check { display: block; margin-top: 2px; }
+.routers input::placeholder { font-size: .8rem; }
+.routers td.fp code { display: block; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+
+/* 0.6: address-list choice */
+.inline-row { display: flex; gap: 10px; align-items: center; max-width: 760px; }
+.inline-row input { flex: 1; }
+.inline-row .btn-inline { white-space: nowrap; }
+.field > select#f_mt_list, .field > input.mt-new { max-width: 760px; width: 100%; }
+.field > input.mt-new { margin-top: 8px; }
+
+/* 0.7: per-router address-list row */
+.routers tr.sub td { padding: 0 4px 12px; border-top: 0; }
+.routers tr:has(+ tr.sub) td { border-bottom: 0; padding-bottom: 4px; }
+.routers .sub-label { font-size: .85rem; color: var(--muted, #52606d); margin-right: 6px; }
+.routers select.w-list { width: 470px; max-width: 100%; }
+.routers input.w-listnew { width: 260px; }
+.small-btn { padding: 7px 14px !important; font-size: .9rem; }

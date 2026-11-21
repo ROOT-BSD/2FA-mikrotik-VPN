@@ -110,6 +110,21 @@ final class AppTest extends TestCase
         self::assertSame(0, $this->ad->calls);
     }
 
+    public function testLoginAsUserAtDomain(): void
+    {
+        $this->enrollTotp();
+        $r = $this->request('POST', '/k7f3x/login', ['username' => 'Ivanenko@Company.local', 'password' => 'Correct-Horse-1']);
+        self::assertSame(303, $r->getStatusCode(), 'user@our-domain is accepted');
+        self::assertSame('/k7f3x/verify', $r->getHeaderLine('Location'));
+    }
+
+    public function testForeignDomainIsRefused(): void
+    {
+        $this->enrollTotp();
+        $r = $this->request('POST', '/k7f3x/login', ['username' => 'ivanenko@evil.com', 'password' => 'Correct-Horse-1']);
+        self::assertSame(401, $r->getStatusCode());
+    }
+
     public function testFullFlowGrantsAccessAndRevokes(): void
     {
         $secret = $this->enrollTotp();
