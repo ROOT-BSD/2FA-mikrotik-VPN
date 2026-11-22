@@ -1,6 +1,8 @@
 <?php
 /**
  * @var callable(mixed): string $e
+ * @var callable(mixed, bool=): string $dt
+ * @var string $csrf
  * @var string $base
  * @var string $version
  * @var int $enrolled
@@ -17,74 +19,92 @@
  * @var array<string, string> $readonly
  */
 $states = ['queued' => 'у черзі', 'running' => 'виконується', 'ok' => 'успішно', 'failed' => 'помилка'];
+$stateBadge = ['queued' => 'bg-secondary', 'running' => 'bg-primary', 'ok' => 'bg-success', 'failed' => 'bg-danger'];
 ?>
-<h1>Огляд</h1>
+<h3 class="mb-4">Огляд</h3>
 <?php foreach ($warnings as $w): ?>
     <div class="alert alert-warning"><?= $e($w) ?></div>
 <?php endforeach ?>
-<div class="tiles">
-    <div class="tile"><span class="tile-num"><?= $e($active) ?></span><span class="tile-label">активних доступів зараз</span></div>
-    <div class="tile"><span class="tile-num"><?= $e($enrolled) ?></span><span class="tile-label">зареєстрованих автентифікаторів</span></div>
-    <div class="tile"><span class="tile-num"><?= $e(count($routers)) ?></span><span class="tile-label">маршрутизаторів MikroTik</span></div>
-    <div class="tile"><span class="tile-num"><?= $e($version) ?></span><span class="tile-label">версія VPN-GW</span></div>
+<div class="row mb-4">
+    <div class="col-6 col-md-3 mb-3"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e($active) ?></h2><div class="text-muted">Активних доступів зараз</div></div></div>
+    <div class="col-6 col-md-3 mb-3"><a href="<?= $e($base) ?>/admin/authenticators" class="text-decoration-none text-reset"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e($enrolled) ?></h2><div class="text-muted">Зареєстрованих автентифікаторів</div></div></a></div>
+    <div class="col-6 col-md-3 mb-3"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e(count($routers)) ?></h2><div class="text-muted">Маршрутизаторів MikroTik</div></div></div>
+    <div class="col-6 col-md-3 mb-3"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e($version) ?></h2><div class="text-muted">Версія VPN-GW</div></div></div>
 </div>
 
-<div class="grid2">
-    <section class="box">
-        <h2>Підключення</h2>
-        <dl class="facts">
-            <dt>MikroTik</dt><dd><?php foreach ($routers as $r): ?><?= $e($r['name']) ?> — <?= $e($r['host']) ?>:<?= $e($r['port']) ?> (v<?= $e($r['version']) ?>, <?= $r['transport'] === 'ssh' ? 'SSH' : 'API' ?>)<br><?php endforeach ?></dd>
-            <dt>AD</dt><dd><?= $e(implode(', ', $ldapHosts)) ?></dd>
-            <dt>Пошта</dt><dd><?= $smtp === '' ? 'вимкнено' : $e($smtp) ?></dd>
-            <dt>Журнал</dt><dd><?= $e($logPath) ?></dd>
-            <dt>Остання копія</dt><dd><?= $lastBackup === null ? 'немає' : $e($lastBackup['name']) ?></dd>
-        </dl>
-    </section>
-    <section class="box">
-        <h2>Тільки в .env</h2>
-        <p class="muted small">Ці параметри впливають на безпеку доступу до панелі, тому змінюються лише на сервері.</p>
-        <dl class="facts">
+<div class="row">
+    <div class="col-lg-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header">Підключення</div>
+            <div class="card-body">
+                <table class="table table-sm mb-0">
+                    <tr><th class="label-col">MikroTik</th><td><?php foreach ($routers as $r): ?><?= $e($r['name']) ?> — <?= $e($r['host']) ?>:<?= $e($r['port']) ?> (v<?= $e($r['version']) ?>, <?= $r['transport'] === 'ssh' ? 'SSH' : 'API' ?>)<br><?php endforeach ?></td></tr>
+                    <tr><th>AD</th><td><?= $e(implode(', ', $ldapHosts)) ?></td></tr>
+                    <tr><th>Пошта</th><td><?= $smtp === '' ? '<span class="text-muted">вимкнено</span>' : $e($smtp) ?></td></tr>
+                    <tr><th>Журнал</th><td><code><?= $e($logPath) ?></code></td></tr>
+                    <tr><th>Остання копія</th><td><?= $lastBackup === null ? '<span class="text-muted">немає</span>' : $e($lastBackup['name']) ?></td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center"><span>Тільки в .env</span><span class="badge bg-secondary">на сервері</span></div>
+            <div class="card-body">
+                <p class="small text-muted">Ці параметри впливають на безпеку доступу до панелі, тому змінюються лише на сервері.</p>
+                <table class="table table-sm mb-0">
 <?php foreach ($readonly as $k => $v): ?>
-            <dt><code><?= $e($k) ?></code></dt><dd><?= $e($v) ?></dd>
+                    <tr><th class="label-col"><code><?= $e($k) ?></code></th><td class="text-break"><?= $e($v) ?></td></tr>
 <?php endforeach ?>
-        </dl>
-    </section>
+                </table>
+            </div>
+        </div>
+    </div>
 </div>
 
-<section class="box">
-    <h2>Останні видачі доступу</h2>
+<h5>Останні видачі доступу</h5>
+<p class="small text-muted mb-2">«Відключити» видаляє IP користувача з address-list усіх маршрутизаторів і розриває його VPN-сесію. Щоб знову підключитися, користувач має пройти портал ще раз.</p>
 <?php if ($grants === []): ?>
-    <p class="muted">Ще не було.</p>
+    <p class="text-muted">Ще не було.</p>
 <?php else: ?>
-    <table class="table">
-        <thead><tr><th>Користувач</th><th>IP</th><th>Відкрито</th><th>До</th><th>Стан</th></tr></thead>
+<div class="table-responsive mb-4">
+    <table class="table table-bordered table-sm bg-white">
+        <thead><tr><th>Користувач</th><th>IP</th><th>Відкрито</th><th>До</th><th>Стан</th><th></th></tr></thead>
         <tbody>
-<?php foreach ($grants as $g): ?>
+<?php foreach ($grants as $g): $isActive = $g['revoked_at'] === null && (int) strtotime($g['expires_at']) > (int) strtotime($now); ?>
             <tr>
                 <td><?= $e($g['username']) ?></td><td><code><?= $e($g['ip']) ?></code></td>
-                <td><?= $e($g['granted_at']) ?></td><td><?= $e($g['expires_at']) ?></td>
-                <td><?php if ($g['revoked_at'] !== null): ?><span class="badge">закрито</span><?php elseif ($g['expires_at'] > $now): ?><span class="badge ok">активний</span><?php else: ?><span class="badge">завершено</span><?php endif ?></td>
+                <td class="text-nowrap"><?= $e($dt($g['granted_at'])) ?></td><td class="text-nowrap"><?= $e($dt($g['expires_at'])) ?></td>
+                <td><?php if ($g['revoked_at'] !== null): ?><span class="badge bg-secondary" title="<?= $e($dt($g['revoked_at'])) ?>">закрито</span><?php elseif ($isActive): ?><span class="badge bg-success">активний</span><?php else: ?><span class="badge bg-light text-dark border">завершено</span><?php endif ?></td>
+                <td class="text-end"><?php if ($isActive): ?>
+                    <form method="post" action="<?= $e($base) ?>/admin/grants/revoke" class="m-0">
+                        <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
+                        <input type="hidden" name="username" value="<?= $e($g['username']) ?>">
+                        <input type="hidden" name="ip" value="<?= $e($g['ip']) ?>">
+                        <button type="submit" class="btn btn-outline-danger btn-sm py-0" title="Видалити IP з address-list усіх маршрутизаторів і розірвати VPN-сесію">Відключити</button>
+                    </form>
+<?php endif ?></td>
             </tr>
 <?php endforeach ?>
         </tbody>
     </table>
+</div>
 <?php endif ?>
-</section>
 
 <?php if ($jobs !== []): ?>
-<section class="box">
-    <h2>Останні завдання</h2>
-    <table class="table">
+<h5>Останні завдання</h5>
+<div class="table-responsive">
+    <table class="table table-bordered table-sm bg-white">
         <thead><tr><th>Завдання</th><th>Створено</th><th>Хто</th><th>Стан</th></tr></thead>
         <tbody>
 <?php foreach ($jobs as $j): ?>
             <tr>
                 <td><a href="<?= $e($base) ?>/admin/jobs/<?= $e($j['id']) ?>"><?= $j['type'] === 'update' ? 'Оновлення' : 'Резервна копія' ?></a></td>
-                <td><?= $e($j['created']) ?></td><td><?= $e($j['by']) ?></td>
-                <td><span class="badge <?= $e($j['state']) ?>"><?= $e($states[$j['state']] ?? $j['state']) ?></span></td>
+                <td class="text-nowrap"><?= $e($dt($j['created'])) ?></td><td><?= $e($j['by']) ?></td>
+                <td><span class="badge <?= $e($stateBadge[$j['state']] ?? 'bg-secondary') ?>"><?= $e($states[$j['state']] ?? $j['state']) ?></span></td>
             </tr>
 <?php endforeach ?>
         </tbody>
     </table>
-</section>
+</div>
 <?php endif ?>

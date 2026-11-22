@@ -57,6 +57,9 @@ final class SettingsController extends AdminController
             if ($action === 'lists' && $section === 'mikrotik') {
                 return $this->lists($request, $response, $admin);
             }
+            if ($action === 'delete_router' && $section === 'mikrotik') {
+                return $this->deleteRouter($request, $response, $admin);
+            }
             if (str_starts_with($action, 'reset:')) {
                 $key = substr($action, 6);
                 if (!in_array($key, array_column($schema['fields'], 'key'), true)) {
@@ -87,6 +90,12 @@ final class SettingsController extends AdminController
         try {
             foreach ($fields as $f) {
                 $key = $f['key'];
+                if (in_array($f['type'], ['routers', 'hostkeys', 'routerpasswords'], true) && !isset($body['routers'])) {
+                    continue; // routers are edited on their own pages (/admin/routers/…)
+                }
+                if (($f['hidden'] ?? false) && !array_key_exists($key, $body) && !array_key_exists($key . '__clear', $body)) {
+                    continue; // not on the page: keep
+                }
                 $value = $this->readField($body, $f);
                 if ($value === null) {
                     continue; // secret left empty = keep
@@ -125,6 +134,194 @@ final class SettingsController extends AdminController
             'section' => $section, 'result' => implode(',', array_map(static fn ($r) => $r['name'] . ':' . ($r['ok'] ? 'ok' : 'fail'), $results)),
         ]);
         return $this->render($response, $section, ['results' => $results]);
+    }
+
+    /**
+     * The page of one router (/admin/routers/{name}) or of a new one (/admin/routers/add):
+     * all its connection settings. Saving rebuilds ROUTERS, ROUTER_PASSWORDS and
+     * MT_SSH_HOSTKEYS from the saved routers with this one replaced (or added), through the
+     * same checks as before (address change needs the password again, drops the host key, …).
+     */
+    public function router(Request $request, Response $response, ?string $name): Response
+    {
+        return $this->guarded($request, $response, function (string $admin) use ($request, $response, $name): Response {
+            $current = null;
+            foreach ($this->cfg->routers() as $r) {
+                if ($r['name'] === $name) {
+                    $current = $r;
+                }
+            }
+            if ($name !== null && $current === null) {
+                $this->flash('Такого маршрутизатора немає.', 'warning');
+                return $this->redirect($response, '/admin/settings/mikrotik');
+            }
+            if ($request->getMethod() !== 'POST') {
+                return $this->routerPage($response, $current);
+            }
+            $action = $this->field($request, 'action', 32);
+            $body = $this->body($request);
+            $posted = is_array($body['router'] ?? null) ? array_filter($body['router'], 'is_string') : [];
+            if ($action === 'lists' && $current !== null) {
+                $found = $this->diagnostics->addressLists();
+                $this->audit->event('admin_test', $admin, $this->remote($request), [
+                    'section' => 'mikrotik_lists', 'result' => $current['name'] . ':' . (in_array($current['name'], $found['routers'], true) ? 'ok' : 'fail'),
+                ]);
+                $errors = array_values(array_filter($found['errors'], static fn (array $e): bool => $e['name'] === $current['name']));
+                return $this->routerPage($response, $current, ['mtLists' => $found, 'results' => $errors === [] ? null : $errors, 'posted' => $posted]);
+            }
+            if ($action !== 'save') {
+                return $response->withStatus(400);
+            }
+            return $this->saveRouter($request, $response, $admin, $current, $posted);
+        });
+    }
+
+    /**
+     * @param array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string}|null $current
+     * @param array<string, string> $posted
+     */
+    private function saveRouter(Request $request, Response $response, string $admin, ?array $current, array $posted): Response
+    {
+        $rows = [];
+        foreach ($this->cfg->routers() as $r) {
+            $rows[] = $current !== null && $r['name'] === $current['name']
+                ? $posted + ['orig' => $r['name']]
+                : ['name' => $r['name'], 'host' => $r['host'], 'version' => (string) $r['version'], 'port' => (string) $r['port'],
+                    'transport' => $r['transport'], 'user' => $r['user'], 'list' => $r['list'], 'orig' => $r['name']];
+        }
+        if ($current === null) {
+            $rows[] = $posted + ['orig' => ''];
+        }
+        $name = trim($posted['name'] ?? '');
+        $changes = [];
+        try {
+            if ($name === '' || preg_match('/^[A-Za-z0-9_-]{1,32}$/', $name) !== 1) {
+                throw new ConfigException('Назва маршрутизатора: латиниця, цифри, _ - (до 32 символів)');
+            }
+            $body = ['routers' => $rows];
+            foreach (SettingsSchema::section('mikrotik')['fields'] ?? [] as $f) {
+                if (!in_array($f['type'], ['routers', 'hostkeys', 'routerpasswords'], true)) {
+                    continue;
+                }
+                $value = (string) $this->readField($body, $f);
+                if ($value !== $this->cfg->get($f['key'])) {
+                    $changes[$f['key']] = $value;
+                }
+            }
+            if ($changes === []) {
+                $this->flash('Змін немає.', 'info');
+                return $this->redirect($response, '/admin/settings/mikrotik');
+            }
+            $candidate = $this->cfg->withPanelValues($changes);
+            $this->panelChecks($candidate, array_keys($changes));
+        } catch (ConfigException $e) {
+            return $this->routerPage($response, $current, ['error' => self::explain($e->getMessage()), 'posted' => $posted], 422);
+        }
+        $this->store->save($changes, $admin, $this->clock->now()->format('Y-m-d H:i:s'));
+        $this->audit->event('admin_settings_saved', $admin, $this->remote($request), [
+            'section' => 'mikrotik', 'router' => $name, 'keys' => implode(',', array_keys($changes)),
+        ]);
+        $this->flash($current === null ? "Маршрутизатор «{$name}» додано." : "Маршрутизатор «{$name}» збережено.");
+        return $this->redirect($response, '/admin/settings/mikrotik');
+    }
+
+    /**
+     * @param array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string}|null $current
+     * @param array<string, mixed> $vars
+     */
+    private function routerPage(Response $response, ?array $current, array $vars = [], int $status = 200): Response
+    {
+        $r = $current ?? ['name' => '', 'host' => '', 'version' => 7, 'port' => 0, 'transport' => 'api', 'user' => '', 'list' => ''];
+        $posted = is_array($vars['posted'] ?? null) ? $vars['posted'] : [];
+        $form = [
+            'name' => $posted['name'] ?? $r['name'],
+            'host' => $posted['host'] ?? $r['host'],
+            'version' => (int) ($posted['version'] ?? $r['version']) === 6 ? 6 : 7,
+            'port' => $posted['port'] ?? ($r['port'] === 0 ? '' : (string) $r['port']),
+            'transport' => ($posted['transport'] ?? $r['transport']) === 'ssh' ? 'ssh' : 'api',
+            'user' => $posted['user'] ?? $r['user'],
+            'list' => ($posted['list'] ?? $r['list']) === '__new' ? ($posted['list_new'] ?? '') : ($posted['list'] ?? $r['list']),
+        ];
+        unset($vars['posted']);
+        return $this->page($response, 'admin_router', 'mikrotik', $vars + [
+            'isNew' => $current === null,
+            'orig' => $r['name'],
+            'router' => $form,
+            'hostKey' => $current !== null ? ($this->cfg->sshHostKeys()[$current['name']] ?? null) : null,
+            'hasOwnPassword' => $current !== null && in_array($current['name'], $this->cfg->routersWithOwnPassword(), true),
+            'commonUsers' => ['api' => $this->cfg->get('MT_USER'), 'ssh' => $this->cfg->get('MT_SSH_USER')],
+            'commonPasswordSet' => ['api' => $this->cfg->get('MT_PASS') !== '', 'ssh' => $this->cfg->get('MT_SSH_PASS') !== '' || $this->cfg->get('MT_SSH_KEY') !== ''],
+            'defList' => $this->cfg->get('MT_LIST'),
+            'mtLists' => $vars['mtLists'] ?? null,
+            'title' => ($current === null ? 'Новий маршрутизатор' : 'Маршрутизатор ' . $current['name']) . ' — VPN-GW',
+        ], $status);
+    }
+
+    /**
+     * Deletes one router (the table under the router cards). Its own password and its
+     * pinned SSH host key go with it. The last router cannot be deleted: the portal needs
+     * at least one. Other unsaved edits on the page are not touched.
+     */
+    private function deleteRouter(Request $request, Response $response, string $admin): Response
+    {
+        $name = $this->field($request, 'router', 32);
+        $routers = $this->cfg->routers();
+        $left = array_values(array_filter($routers, static fn (array $r): bool => $r['name'] !== $name));
+        if (count($left) === count($routers)) {
+            $this->flash('Такого маршрутизатора вже немає.', 'warning');
+            return $this->redirect($response, '/admin/settings/mikrotik');
+        }
+        if ($left === []) {
+            $this->flash('Не можна видалити єдиний маршрутизатор: портал має працювати хоча б з одним. Спершу додайте інший.', 'error');
+            return $this->redirect($response, '/admin/settings/mikrotik');
+        }
+        $deleted = array_values(array_filter($routers, static fn (array $r): bool => $r['name'] === $name))[0];
+        $changes = ['ROUTERS' => json_encode(array_map(self::exportRouter(...), $left), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)];
+        if (in_array($name, $this->cfg->routersWithOwnPassword(), true)) {
+            $pw = [];
+            foreach ($left as $r) {
+                if (in_array($r['name'], $this->cfg->routersWithOwnPassword(), true)) {
+                    $pw[$r['name']] = $this->cfg->routerCredentials($r)['password'];
+                }
+            }
+            ksort($pw);
+            $changes['ROUTER_PASSWORDS'] = $pw === [] ? '{}' : json_encode($pw, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+        $keys = $this->cfg->sshHostKeys();
+        if (isset($keys[$name])) {
+            unset($keys[$name]);
+            $changes['MT_SSH_HOSTKEYS'] = $keys === [] ? '{}' : json_encode($keys, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        }
+        try {
+            $this->cfg->withPanelValues($changes);
+        } catch (ConfigException $e) {
+            $this->flash('Не видалено: ' . self::explain($e->getMessage()), 'error');
+            return $this->redirect($response, '/admin/settings/mikrotik');
+        }
+        $this->store->save($changes, $admin, $this->clock->now()->format('Y-m-d H:i:s'));
+        $this->audit->event('admin_router_deleted', $admin, $this->remote($request), [
+            'router' => $name, 'host' => $deleted['host'], 'keys' => implode(',', array_keys($changes)),
+        ]);
+        $this->flash("Маршрутизатор «{$name}» ({$deleted['host']}) видалено. Адреси, які портал уже додав на ньому, MikroTik видалить сам після тайм-ауту.");
+        return $this->redirect($response, '/admin/settings/mikrotik');
+    }
+
+    /**
+     * A router as it is stored in ROUTERS (the form the panel saves).
+     *
+     * @param array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string} $r
+     * @return array<string, int|string>
+     */
+    private static function exportRouter(array $r): array
+    {
+        $out = ['name' => $r['name'], 'host' => $r['host'], 'version' => $r['version'], 'port' => $r['port'], 'transport' => $r['transport']];
+        if ($r['user'] !== '') {
+            $out['user'] = $r['user'];
+        }
+        if ($r['list'] !== '') {
+            $out['list'] = $r['list'];
+        }
+        return $out;
     }
 
     /**
@@ -450,6 +647,7 @@ final class SettingsController extends AdminController
             'sources' => $sources,
             'secretSet' => array_combine(SettingsSchema::SECRETS, array_map(fn ($k) => $this->cfg->get($k) !== '', SettingsSchema::SECRETS)),
             'routers' => is_array($routers) ? $routers : [],
+            'savedRouters' => $this->cfg->routers(),
             'categories' => SettingsSchema::LOG_CATEGORIES,
             'meta' => $this->store->meta(),
             'hostKeys' => $this->cfg->sshHostKeys(),

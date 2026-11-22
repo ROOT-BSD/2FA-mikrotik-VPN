@@ -39,6 +39,7 @@ final class Config
         'SMTP_FROM' => '',
         'SMTP_CA_FILE' => '',
         'IT_CONTACT' => 'ІТ-служба',
+        'USER_GUIDE_PDF' => '',
         'RATE_LOGIN_IP' => '5/900',
         'RATE_LOGIN_USER' => '3/900',
         'RATE_MFA_ATTEMPTS' => '3',
@@ -453,6 +454,18 @@ final class Config
         }
         return $out;
     }
+
+    /**
+     * The «how to connect» guide sent after the first enrolment: USER_GUIDE_PDF, or the PDF
+     * shipped in the portal's doc/ folder.
+     */
+    public function userGuidePdf(): string
+    {
+        $p = trim($this->v['USER_GUIDE_PDF']);
+        return $p !== '' ? $p : dirname(__DIR__) . '/doc/' . self::USER_GUIDE_FILE;
+    }
+
+    public const USER_GUIDE_FILE = 'VPN-GW_Інструкція_підключення.pdf';
 
     /** @return list<string> names of routers that have their own password */
     public function routersWithOwnPassword(): array

@@ -30,6 +30,7 @@ final class App
         $result = $c->resultController(...);
         $enroll = $c->enrollController(...);
         $adminAuth = $c->adminAuthController(...);
+        $authenticators = $c->authenticatorsController(...);
         $dashboard = $c->dashboardController(...);
         $settings = $c->settingsController(...);
         $logs = $c->logsController(...);
@@ -46,10 +47,15 @@ final class App
 
         // Admin panel: internal networks only (middleware below) + local administrator login.
         $app->get('/admin', fn ($rq, $rs) => $dashboard()->show($rq, $rs));
+        $app->post('/admin/grants/revoke', fn ($rq, $rs) => $dashboard()->revoke($rq, $rs));
+        $app->get('/admin/authenticators', fn ($rq, $rs) => $authenticators()->show($rq, $rs));
+        $app->post('/admin/authenticators/delete', fn ($rq, $rs) => $authenticators()->delete($rq, $rs));
         $app->get('/admin/login', fn ($rq, $rs) => $adminAuth()->form($rq, $rs));
         $app->post('/admin/login', fn ($rq, $rs) => $adminAuth()->login($rq, $rs));
         $app->post('/admin/logout', fn ($rq, $rs) => $adminAuth()->logout($rq, $rs));
         $app->map(['GET', 'POST'], '/admin/password', fn ($rq, $rs) => $adminAuth()->password($rq, $rs));
+        $app->map(['GET', 'POST'], '/admin/routers/add', fn ($rq, $rs) => $settings()->router($rq, $rs, null));
+        $app->map(['GET', 'POST'], '/admin/routers/edit/{name:[A-Za-z0-9_-]{1,32}}', fn ($rq, $rs, array $a) => $settings()->router($rq, $rs, (string) $a['name']));
         $app->map(['GET', 'POST'], '/admin/settings/{section:[a-z]+}', fn ($rq, $rs, array $a) => $settings()->handle($rq, $rs, (string) $a['section']));
         $app->get('/admin/logs', fn ($rq, $rs) => $logs()->show($rq, $rs));
         $app->map(['GET', 'POST'], '/admin/backups', fn ($rq, $rs) => $maint()->backups($rq, $rs));

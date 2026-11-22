@@ -19,6 +19,8 @@ use VpnGw\Settings\SettingsStore;
 use VpnGw\Storage\Database;
 use VpnGw\Tests\Support\FakeAuthenticator;
 use VpnGw\Tests\Support\FakeDiagnostics;
+use VpnGw\Tests\Support\FakeRouter;
+use VpnGw\RouterOs\AccessGranter;
 use VpnGw\Tests\Support\FrozenClock;
 use VpnGw\Tests\Support\TempDir;
 use VpnGw\Tests\Support\TestConfig;
@@ -38,6 +40,7 @@ final class AdminPanelTest extends TestCase
     private FrozenClock $clock;
     private Database $db;
     private FakeDiagnostics $diag;
+    private ?FakeRouter $router = null;
     private string $tmp;
     /** @var array<string, string> */
     private array $cfgOverride = [];
@@ -82,6 +85,10 @@ final class AdminPanelTest extends TestCase
             'audit' => AuditLogger::null(),
             'authenticator' => new FakeAuthenticator(),
             'diagnostics' => $this->diag,
+            'granter' => new AccessGranter(
+                [$this->router ??= new FakeRouter('core')], 'Allowed_VPN_Users', '10:00:00', 36000,
+                $this->tmp . '/locks', $this->db, AuditLogger::null(), $this->clock,
+            ),
         ]));
     }
 
@@ -246,7 +253,9 @@ final class AdminPanelTest extends TestCase
         $this->login();
         $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
         self::assertStringNotContainsString('value="secret"', $html);
-        self::assertStringContainsString('задано', $html);
+        $html = self::body($this->request('GET', '/admin/routers/edit/core'));
+        self::assertStringNotContainsString('value="secret"', $html);
+        self::assertStringContainsString('типовий з .env', $html);
         $html = self::body($this->request('GET', '/admin/settings/backup'));
         self::assertStringNotContainsString('backup-passphrase-1', $html);
     }
@@ -355,7 +364,8 @@ final class AdminPanelTest extends TestCase
         $this->boot();
         $this->login();
         $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
-        self::assertStringContainsString('SHA256:AAAAAAAAAAA', $html);
+        self::assertSame(3, substr_count($html, 'ключ підтверджено'));
+        self::assertStringContainsString('SHA256:AAAAAAAAAAA', self::body($this->request('GET', '/admin/routers/edit/a')));
         $form = $this->mikrotikForm();
         $form['routers'] = [
             ['name' => 'a', 'host' => '10.0.30.1', 'version' => '6', 'port' => '22', 'transport' => 'ssh'],
@@ -700,11 +710,13 @@ final class AdminPanelTest extends TestCase
         }
 
         $this->boot();
-        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        $html = self::body($this->request('GET', '/admin/routers/edit/core'));
         self::assertStringNotContainsString('Core-Pa', $html);
         self::assertStringContainsString('value="portal_core"', $html);
-        self::assertStringContainsString('власний', $html);
-        self::assertStringContainsString('placeholder="vpn_portal"', $html);
+        self::assertStringContainsString('задано; залиште порожнім', $html);
+        self::assertStringContainsString('name="router[clear_password]"', $html);
+        self::assertStringContainsString('placeholder="vpn_portal"', self::body($this->request('GET', '/admin/routers/edit/branch')));
+        self::assertStringNotContainsString('Core-Pa', self::body($this->request('GET', '/admin/settings/mikrotik')));
 
         // empty password field keeps the stored one; renaming the row keeps it too
         $form['routers'][0] = ['orig' => 'core', 'name' => 'core2', 'host' => '10.0.10.1', 'version' => '7', 'port' => '8443', 'user' => 'portal_core'];
@@ -752,55 +764,6 @@ final class AdminPanelTest extends TestCase
         self::assertStringContainsString('маршрутизатор «branch»', self::body($r));
     }
 
-    /** 0.6: choosing MT_LIST from the lists that exist on the routers. */
-    public function testChooseAddressListFromRouters(): void
-    {
-        $this->login();
-        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
-        self::assertStringContainsString('value="lists"', $html, 'button «Вибрати з MikroTik»');
-
-        $form = $this->mikrotikForm();
-        $form['action'] = 'lists';
-        $form['MT_TIMEOUT'] = '07:00:00';
-        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
-        self::assertSame(200, $r->getStatusCode());
-        $html = self::body($r);
-        self::assertStringContainsString('<option value="Allowed_VPN_Users" selected>Allowed_VPN_Users — core: 3 адреси, 2 правила</option>', $html);
-        self::assertStringContainsString('blacklist — core: 120 адрес, 1 правило', $html);
-        self::assertStringContainsString('VPN_2FA — core: 0 адрес, 1 правило', $html);
-        self::assertStringContainsString('value="__new"', $html);
-        self::assertStringContainsString('Connection timed out', $html, 'router errors are shown');
-        self::assertStringContainsString('value="07:00:00"', $html, 'typed values stay on the page');
-        self::assertArrayNotHasKey('MT_TIMEOUT', $this->settings()->values(), 'reading lists saves nothing');
-
-        $form['action'] = 'save';
-        $form['MT_LIST'] = 'VPN_2FA';
-        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
-        self::assertSame(303, $r->getStatusCode(), self::body($r));
-        self::assertSame('VPN_2FA', $this->settings()->values()['MT_LIST']);
-
-        $this->boot();
-        $form['MT_LIST'] = '__new';
-        $form['MT_LIST__new'] = 'VPN_New';
-        $r = $this->request('POST', '/admin/settings/mikrotik', $form);
-        self::assertSame(303, $r->getStatusCode(), self::body($r));
-        self::assertSame('VPN_New', $this->settings()->values()['MT_LIST']);
-
-        $this->boot();
-        $form['MT_LIST__new'] = 'bad name';
-        self::assertSame(422, $this->request('POST', '/admin/settings/mikrotik', $form)->getStatusCode());
-    }
-
-    public function testCurrentListMissingOnRoutersIsKeptAsOption(): void
-    {
-        $this->cfgOverride['MT_LIST'] = 'Old_List';
-        $this->boot();
-        $this->login();
-        $form = $this->mikrotikForm();
-        $form['action'] = 'lists';
-        $html = self::body($this->request('POST', '/admin/settings/mikrotik', $form));
-        self::assertStringContainsString('<option value="Old_List" selected>Old_List — поточний; на маршрутизаторах не знайдено</option>', $html);
-    }
 
     /** 0.7: address-list per router in the routers table. */
     public function testPerRouterAddressListInPanel(): void
@@ -816,19 +779,19 @@ final class AdminPanelTest extends TestCase
         self::assertArrayNotHasKey('list', $routers[1], 'empty = MT_LIST');
 
         $this->boot();
-        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
-        self::assertStringContainsString('name="routers[0][list]" value="VPN_core"', $html);
-        self::assertStringContainsString('placeholder="типовий: Allowed_VPN_Users"', $html);
+        $html = self::body($this->request('GET', '/admin/routers/edit/core'));
+        self::assertStringContainsString('name="router[list]" value="VPN_core"', $html);
+        self::assertStringContainsString('placeholder="типовий: Allowed_VPN_Users"', self::body($this->request('GET', '/admin/routers/edit/branch')));
 
-        // after «Вибрати списки з MikroTik»: a choice per router (FakeDiagnostics: core read, branch failed)
-        $form['action'] = 'lists';
-        $html = self::body($this->request('POST', '/admin/settings/mikrotik', $form));
-        self::assertStringContainsString('<select name="routers[0][list]"', $html);
+        // «Вибрати з MikroTik» on the router's page: its own lists (FakeDiagnostics: core read, branch failed)
+        $html = self::body($this->request('POST', '/admin/routers/edit/core', ['action' => 'lists']));
+        self::assertStringContainsString('<select name="router[list]"', $html);
         self::assertStringContainsString('VPN_core — на маршрутизаторі не знайдено', $html);
         self::assertStringContainsString('типовий: Allowed_VPN_Users — 3 адреси, 2 правила', $html);
         self::assertStringContainsString('<option value="blacklist">blacklist — 120 адрес, 1 правило</option>', $html);
-        self::assertStringContainsString('списки не прочитано', $html, 'branch could not be read');
-        self::assertStringNotContainsString('<select name="routers[1][list]"', $html);
+        $html = self::body($this->request('POST', '/admin/routers/edit/branch', ['action' => 'lists']));
+        self::assertStringContainsString('Connection timed out', $html, 'branch could not be read');
+        self::assertStringNotContainsString('<select name="router[list]"', $html);
 
         // choose «інший / новий»
         $form['action'] = 'save';
@@ -842,5 +805,285 @@ final class AdminPanelTest extends TestCase
         $r = $this->request('POST', '/admin/settings/mikrotik', $form);
         self::assertSame(422, $r->getStatusCode());
         self::assertStringContainsString('address-list — лише латиниця', self::body($r));
+    }
+
+    /** 0.8.1: dates as 22.11.2026 09:06:47; «Відключити» for an active access. */
+    public function testDisconnectUserFromDashboard(): void
+    {
+        $now = $this->clock->now();
+        $this->db->recordGrant('ivanenko', '198.51.100.7', $now->modify('-1 hour')->format(DATE_ATOM), $now->modify('+9 hours')->format(DATE_ATOM));
+        $this->db->recordGrant('petrenko', '198.51.100.8', $now->modify('-12 hours')->format(DATE_ATOM), $now->modify('-2 hours')->format(DATE_ATOM));
+        $this->router?->addEntry('Allowed_VPN_Users', '198.51.100.7', '09:00:00', 'User: ivanenko via VPN-2FA');
+        $this->login();
+
+        $html = self::body($this->request('GET', '/admin'));
+        $expires = \VpnGw\Http\View::formatDate($now->modify('+9 hours')->format(DATE_ATOM));
+        self::assertMatchesRegularExpression('/^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}$/', $expires);
+        self::assertStringContainsString($expires, $html);
+        self::assertStringNotContainsString('T', preg_replace('/[^0-9T:+-]/', ' ', $expires) ?? '');
+        self::assertSame(1, substr_count($html, 'value="Відключити"') + substr_count($html, '>Відключити</button>'), 'only the active access has the button');
+
+        // only an active access can be closed
+        $r = $this->request('POST', '/admin/grants/revoke', ['username' => 'petrenko', 'ip' => '198.51.100.8']);
+        self::assertSame(303, $r->getStatusCode());
+        self::assertStringContainsString('уже не активний', self::body($this->request('GET', '/admin')));
+
+        $r = $this->request('POST', '/admin/grants/revoke', ['username' => 'ivanenko', 'ip' => '198.51.100.7']);
+        self::assertSame(303, $r->getStatusCode());
+        self::assertSame([], $this->router?->entries, 'IP removed from the address-list');
+        $html = self::body($this->request('GET', '/admin'));
+        self::assertStringContainsString('Користувача ivanenko (198.51.100.7) відключено', $html);
+        self::assertStringNotContainsString('>Відключити</button>', $html);
+        self::assertSame(0, $this->db->countActiveGrants($now->format(DATE_ATOM)));
+    }
+
+    public function testDisconnectNeedsLoginAndCsrf(): void
+    {
+        $r = $this->request('POST', '/admin/grants/revoke', ['username' => 'ivanenko', 'ip' => '198.51.100.7']);
+        self::assertSame('/k7f3x/admin/login', $r->getHeaderLine('Location'));
+        $this->login();
+        $r = $this->request('POST', '/admin/grants/revoke', ['username' => 'ivanenko', 'ip' => '198.51.100.7'], csrf: false);
+        self::assertContains($r->getStatusCode(), [400, 403]);
+    }
+
+    public function testDateFormat(): void
+    {
+        $tz = date_default_timezone_get();
+        date_default_timezone_set('Europe/Kyiv');
+        try {
+            self::assertSame('22.11.2026 09:06:47', \VpnGw\Http\View::formatDate('2026-11-22T09:06:47+02:00'));
+            self::assertSame('22.11.2026 09:06:47', \VpnGw\Http\View::formatDate('2026-11-22T07:06:47+00:00'), 'shown in the server time zone');
+            self::assertSame('22.11.2026 09:06:47', \VpnGw\Http\View::formatDate('2026-11-22 09:06:47'));
+            self::assertSame('22.11.2026 09:06', \VpnGw\Http\View::formatDate('2026-11-22 09:06:47', false));
+            self::assertSame('22.11.2026 09:06:47', \VpnGw\Http\View::formatDate(1795331207));
+            self::assertSame('—', \VpnGw\Http\View::formatDate('—'));
+            self::assertSame('', \VpnGw\Http\View::formatDate(null));
+        } finally {
+            date_default_timezone_set($tz);
+        }
+    }
+
+    public function testLogEventIsPlainText(): void
+    {
+        @mkdir($this->tmp . '/logs', 0700, true);
+        file_put_contents($this->tmp . '/logs/audit.log', json_encode(['message' => 'login_fail', 'datetime' => '2026-11-22T09:06:47+02:00', 'level_name' => 'WARNING',
+            'context' => ['event' => 'login_fail', 'category' => 'auth', 'user' => 'mhlushak', 'ip' => '172.20.2.29', 'reason' => 'bad_ip']]) . "\n");
+        $this->login();
+        $html = self::body($this->request('GET', '/admin/logs'));
+        self::assertStringContainsString('<td class="text-nowrap event">login_fail</td>', $html);
+        self::assertStringContainsString(\VpnGw\Http\View::formatDate('2026-11-22T09:06:47+02:00'), $html);
+        self::assertStringNotContainsString('class="badge', preg_replace('/<nav.*?<\/nav>/s', '', $html) ?? '');
+    }
+
+    /** 0.8.2: a card per router; routers are deleted from the table under the cards. */
+    public function testRouterCardsAndDeleteFromTable(): void
+    {
+        $this->login();
+        $form = $this->mikrotikForm();
+        $form['routers'][1] += ['transport' => 'api', 'user' => 'portal_branch', 'password' => 'Branch-Pass-1', 'list' => 'VPN_branch'];
+        $form['routers'][0] += ['password' => 'Core-Pass-1'];
+        self::assertSame(303, $this->request('POST', '/admin/settings/mikrotik', $form)->getStatusCode());
+        $this->boot();
+
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertSame(3, substr_count($html, 'card h-100 router-card'), 'two routers + «Додати маршрутизатор»');
+        self::assertStringContainsString('href="/k7f3x/admin/routers/add"', $html);
+        self::assertStringContainsString('href="/k7f3x/admin/routers/edit/branch"', $html);
+        self::assertStringContainsString('<dd class="col-7 address-list"><strong>VPN_branch</strong></dd>', $html, 'own list, bold');
+        self::assertStringContainsString('<dd class="col-7 address-list"><strong>Allowed_VPN_Users</strong> <span class="text-muted small fw-normal">(типовий)</span></dd>', $html);
+        self::assertStringNotContainsString('name="routers[', $html, 'cards are read-only');
+        self::assertStringContainsString('Підключені маршрутизатори', $html);
+        self::assertStringContainsString('form="router-delete" name="router" value="branch"', $html);
+        self::assertStringContainsString('<form method="post" action="/k7f3x/admin/settings/mikrotik" id="router-delete"', $html);
+        self::assertStringNotContainsString('[delete]', $html, 'no delete checkboxes in the cards');
+
+        $r = $this->request('POST', '/admin/settings/mikrotik', ['action' => 'delete_router', 'router' => 'branch']);
+        self::assertSame(303, $r->getStatusCode());
+        $v = $this->settings()->values();
+        self::assertSame(['core'], array_column(json_decode($v['ROUTERS'], true), 'name'));
+        self::assertSame('{"core":"Core-Pass-1"}', $v['ROUTER_PASSWORDS'], 'the deleted router\'s password goes with it');
+        $this->boot();
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertStringContainsString('«branch» (10.0.20.1) видалено', $html);
+        self::assertStringContainsString('disabled title="Єдиний маршрутизатор видалити не можна"', $html);
+
+        // the last one stays
+        $r = $this->request('POST', '/admin/settings/mikrotik', ['action' => 'delete_router', 'router' => 'core']);
+        self::assertSame(303, $r->getStatusCode());
+        self::assertSame(['core'], array_column(json_decode($this->settings()->values()['ROUTERS'], true), 'name'));
+        self::assertStringContainsString('Не можна видалити єдиний маршрутизатор', self::body($this->request('GET', '/admin/settings/mikrotik')));
+
+        $this->request('POST', '/admin/settings/mikrotik', ['action' => 'delete_router', 'router' => 'nope']);
+        self::assertStringContainsString('Такого маршрутизатора вже немає', self::body($this->request('GET', '/admin/settings/mikrotik')));
+    }
+
+    public function testDeleteRouterDropsItsHostKey(): void
+    {
+        $this->cfgOverride['ROUTERS'] = '[{"name":"core","host":"10.0.10.1","version":7,"port":8443},{"name":"old","host":"10.0.30.1","version":6,"port":22,"transport":"ssh"}]';
+        $this->cfgOverride['MT_SSH_USER'] = 'vpn_portal';
+        $this->cfgOverride['MT_SSH_PASS'] = 'ssh-pass';
+        $this->cfgOverride['MT_SSH_HOSTKEYS'] = '{"old":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}';
+        $this->boot();
+        $this->login();
+        self::assertSame(303, $this->request('POST', '/admin/settings/mikrotik', ['action' => 'delete_router', 'router' => 'old'])->getStatusCode());
+        $v = $this->settings()->values();
+        self::assertSame('{}', $v['MT_SSH_HOSTKEYS']);
+        self::assertSame(['core'], array_column(json_decode($v['ROUTERS'], true), 'name'));
+    }
+
+    public function testDeleteRouterNeedsCsrf(): void
+    {
+        $this->login();
+        $r = $this->request('POST', '/admin/settings/mikrotik', ['action' => 'delete_router', 'router' => 'branch'], csrf: false);
+        self::assertContains($r->getStatusCode(), [400, 403]);
+        self::assertArrayNotHasKey('ROUTERS', $this->settings()->values());
+    }
+
+    /** 0.8.3: «Автентифікатори» — the registered bindings on a page of their own, with deletion. */
+    public function testAuthenticatorsPage(): void
+    {
+        $now = $this->clock->now();
+        $this->db->insertTotp('ivanenko', 'SECRET-BLOB-1', intdiv($now->getTimestamp(), 30), 'enroll', $now->modify('-3 days')->format(DATE_ATOM));
+        $this->db->insertTotp('petrenko', 'y', 0, 'enroll', $now->modify('-1 day')->format(DATE_ATOM));
+        $this->db->insertTotp('iv_anova', 'z', 0, 'enroll', $now->format(DATE_ATOM));
+        $this->db->recordGrant('ivanenko', '198.51.100.7', $now->format(DATE_ATOM), $now->modify('+9 hours')->format(DATE_ATOM));
+        $this->db->setUserEmail('ivanenko', 'ivan@company.ua', $now->format(DATE_ATOM));
+        $this->login();
+        self::assertStringContainsString('<td>ivan@company.ua</td>', self::body($this->request('GET', '/admin/authenticators')));
+
+        $html = self::body($this->request('GET', '/admin'));
+        self::assertStringContainsString('href="/k7f3x/admin/authenticators"', $html, 'menu item and dashboard tile');
+
+        $html = self::body($this->request('GET', '/admin/authenticators'));
+        self::assertStringContainsString('Усього: 3', $html);
+        foreach (['ivanenko', 'petrenko', 'iv_anova'] as $u) {
+            self::assertStringContainsString('name="username" value="' . $u . '"', $html);
+        }
+        self::assertStringContainsString(\VpnGw\Http\View::formatDate($now->modify('-3 days')->format(DATE_ATOM)), $html);
+        self::assertSame(1, substr_count($html, 'badge bg-success">активний'), 'ivanenko has an open VPN access');
+        self::assertStringNotContainsString('SECRET-BLOB-1', $html, 'secrets never reach the page');
+
+        // search: "_" is a literal, not a LIKE wildcard
+        $html = self::body($this->request('GET', '/admin/authenticators?q=iv_'));
+        self::assertStringContainsString('Знайдено: 1 з 3', $html);
+        self::assertStringContainsString('value="iv_anova"', $html);
+
+        $r = $this->request('POST', '/admin/authenticators/delete', ['username' => 'petrenko']);
+        self::assertSame(303, $r->getStatusCode());
+        self::assertNull($this->db->findTotp('petrenko'));
+        self::assertNotNull($this->db->findTotp('ivanenko'));
+        $html = self::body($this->request('GET', '/admin/authenticators'));
+        self::assertStringContainsString('Автентифікатор користувача petrenko видалено', $html);
+        self::assertStringContainsString('Усього: 2', $html);
+
+        $this->request('POST', '/admin/authenticators/delete', ['username' => 'petrenko']);
+        self::assertStringContainsString('Такого автентифікатора вже немає', self::body($this->request('GET', '/admin/authenticators')));
+    }
+
+    public function testAuthenticatorDeleteNeedsLoginAndCsrf(): void
+    {
+        $this->db->insertTotp('ivanenko', 'x', 0, 'enroll', $this->clock->now()->format(DATE_ATOM));
+        $r = $this->request('POST', '/admin/authenticators/delete', ['username' => 'ivanenko']);
+        self::assertSame('/k7f3x/admin/login', $r->getHeaderLine('Location'));
+        self::assertSame(404, $this->request('GET', '/admin/authenticators', ip: self::PUBLIC_IP)->getStatusCode());
+        $this->login();
+        $r = $this->request('POST', '/admin/authenticators/delete', ['username' => 'ivanenko'], csrf: false);
+        self::assertContains($r->getStatusCode(), [400, 403]);
+        self::assertNotNull($this->db->findTotp('ivanenko'));
+    }
+
+    /** 0.9: read-only router cards; each router is edited on its own page. */
+    public function testRouterEditPage(): void
+    {
+        $this->login();
+        $main = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertStringNotContainsString('типові облікові дані', $main, 'common credential groups are gone from the page');
+        self::assertStringNotContainsString('name="MT_USER"', $main);
+        self::assertStringNotContainsString('name="MT_SSH_KEY"', $main);
+        self::assertStringNotContainsString('name="MT_CA_FILE"', $main);
+        self::assertStringNotContainsString('name="MT_LIST"', $main);
+        self::assertStringNotContainsString('Типовий address-list', $main);
+        self::assertStringContainsString('name="MT_TIMEOUT"', $main);
+        self::assertStringContainsString('name="PRIVATE_CLIENT_NETWORKS"', $main);
+
+        $edit = self::body($this->request('GET', '/admin/routers/edit/core'));
+        foreach (['router[name]', 'router[host]', 'router[version]', 'router[transport]', 'router[port]', 'router[user]', 'router[password]', 'router[list]'] as $f) {
+            self::assertStringContainsString('name="' . $f . '"', $edit);
+        }
+        self::assertStringContainsString('value="10.0.10.1"', $edit);
+
+        $r = $this->request('POST', '/admin/routers/edit/core', ['action' => 'save', 'router' => [
+            'name' => 'core', 'host' => '10.0.10.1', 'version' => '7', 'transport' => 'api', 'port' => '8443',
+            'user' => 'portal_core', 'password' => 'Core-Pass-9', 'list' => 'VPN_core',
+        ]]);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame('/k7f3x/admin/settings/mikrotik', $r->getHeaderLine('Location'));
+        $v = $this->settings()->values();
+        $routers = json_decode($v['ROUTERS'], true);
+        self::assertSame(['name' => 'core', 'host' => '10.0.10.1', 'version' => 7, 'port' => 8443, 'transport' => 'api', 'user' => 'portal_core', 'list' => 'VPN_core'], $routers[0]);
+        self::assertSame(['name' => 'branch', 'host' => '10.0.20.1', 'version' => 6, 'port' => 8729, 'transport' => 'api'], $routers[1], 'other routers untouched');
+        self::assertSame('{"core":"Core-Pass-9"}', $v['ROUTER_PASSWORDS']);
+        $this->boot();
+        self::assertStringContainsString('Маршрутизатор «core» збережено', self::body($this->request('GET', '/admin/settings/mikrotik')));
+
+        // new address without the password again: refused, the form keeps what was typed
+        $r = $this->request('POST', '/admin/routers/edit/core', ['action' => 'save', 'router' => [
+            'name' => 'core', 'host' => '10.9.9.9', 'version' => '7', 'transport' => 'api', 'port' => '8443', 'user' => 'portal_core',
+        ]]);
+        self::assertSame(422, $r->getStatusCode());
+        self::assertStringContainsString('введіть його пароль ще раз', self::body($r));
+        self::assertStringContainsString('value="10.9.9.9"', self::body($r));
+
+        // add a router
+        $r = $this->request('POST', '/admin/routers/add', ['action' => 'save', 'router' => [
+            'name' => 'office2', 'host' => '10.0.40.1', 'version' => '6', 'transport' => 'ssh', 'port' => '22', 'user' => 'portal_o2', 'password' => 'O2-Pass-1',
+        ]]);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        $v = $this->settings()->values();
+        self::assertSame(['core', 'branch', 'office2'], array_column(json_decode($v['ROUTERS'], true), 'name'));
+        self::assertSame('{"core":"Core-Pass-9","office2":"O2-Pass-1"}', $v['ROUTER_PASSWORDS']);
+        $this->boot();
+
+        // duplicate name and empty name are refused
+        $r = $this->request('POST', '/admin/routers/add', ['action' => 'save', 'router' => ['name' => 'core', 'host' => '10.0.50.1', 'version' => '7', 'transport' => 'api', 'port' => '443']]);
+        self::assertSame(422, $r->getStatusCode());
+        self::assertStringContainsString('унікальними', self::body($r));
+        $r = $this->request('POST', '/admin/routers/add', ['action' => 'save', 'router' => ['name' => '', 'host' => '10.0.50.1', 'version' => '7', 'transport' => 'api', 'port' => '443']]);
+        self::assertSame(422, $r->getStatusCode());
+
+        // rename keeps the password
+        $r = $this->request('POST', '/admin/routers/edit/office2', ['action' => 'save', 'router' => [
+            'name' => 'office3', 'host' => '10.0.40.1', 'version' => '6', 'transport' => 'ssh', 'port' => '22', 'user' => 'portal_o2',
+        ]]);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame('{"core":"Core-Pass-9","office3":"O2-Pass-1"}', $this->settings()->values()['ROUTER_PASSWORDS']);
+        $this->boot();
+        $r = $this->request('GET', '/admin/routers/edit/office2');
+        self::assertSame(303, $r->getStatusCode(), 'unknown router: back to the list');
+    }
+
+    public function testMainPageSaveKeepsRoutersAndCommonCredentials(): void
+    {
+        $this->login();
+        $before = $this->settings()->values();
+        $r = $this->request('POST', '/admin/settings/mikrotik', [
+            'action' => 'save', 'MT_TIMEOUT' => '08:00:00', 'PRIVATE_CLIENT_NETWORKS' => '',
+        ]);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        $v = $this->settings()->values();
+        self::assertSame('08:00:00', $v['MT_TIMEOUT']);
+        foreach (['ROUTERS', 'ROUTER_PASSWORDS', 'MT_SSH_HOSTKEYS', 'MT_USER', 'MT_PASS', 'MT_SSH_USER', 'MT_SSH_PASS', 'MT_SSH_KEY', 'MT_LIST', 'MT_CA_FILE'] as $k) {
+            self::assertSame($before[$k] ?? null, $v[$k] ?? null, "$k untouched");
+        }
+    }
+
+    public function testRouterPageIsInternalAndNeedsCsrf(): void
+    {
+        self::assertSame(404, $this->request('GET', '/admin/routers/edit/core', ip: self::PUBLIC_IP)->getStatusCode());
+        self::assertSame(404, $this->request('GET', '/admin/routers/add', ip: self::PUBLIC_IP)->getStatusCode());
+        $this->login();
+        $r = $this->request('POST', '/admin/routers/add', ['action' => 'save', 'router' => ['name' => 'x1', 'host' => '10.0.50.1', 'version' => '7', 'transport' => 'api', 'port' => '443']], csrf: false);
+        self::assertContains($r->getStatusCode(), [400, 403]);
+        self::assertArrayNotHasKey('ROUTERS', $this->settings()->values());
     }
 }

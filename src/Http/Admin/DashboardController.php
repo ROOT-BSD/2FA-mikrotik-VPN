@@ -12,6 +12,8 @@ use VpnGw\Config;
 use VpnGw\Http\Session;
 use VpnGw\Http\View;
 use VpnGw\Log\AuditLogger;
+use VpnGw\RouterOs\AccessGranter;
+use VpnGw\RouterOs\RouterOsException;
 use VpnGw\Storage\Database;
 use VpnGw\Version;
 
@@ -25,6 +27,8 @@ final class DashboardController extends AdminController
         AuditLogger $audit,
         private readonly Database $db,
         private readonly Jobs $jobs,
+        /** @var \Closure(): AccessGranter */
+        private readonly \Closure $granter,
     ) {
         parent::__construct($cfg, $session, $view, $clock, $audit);
     }
@@ -32,7 +36,8 @@ final class DashboardController extends AdminController
     public function show(Request $request, Response $response): Response
     {
         return $this->guarded($request, $response, function () use ($response): Response {
-            $now = $this->clock->now()->format('Y-m-d H:i:s');
+            // Same format as the grants table (DATE_ATOM): the comparison is a string comparison.
+            $now = $this->clock->now()->format(DATE_ATOM);
             $warnings = [];
             if ($this->cfg->get('BACKUP_PASSPHRASE') === '') {
                 $warnings[] = 'Не задано пароль шифрування резервних копій — копії не створюються.';
@@ -74,6 +79,34 @@ final class DashboardController extends AdminController
                     'DB_PATH' => $this->cfg->get('DB_PATH'),
                 ],
             ]);
+        });
+    }
+
+    /**
+     * «Відключити»: removes the user's IP from the address-list on every router and drops
+     * the PPP / IPsec sessions, as the user's own «Відкликати доступ» does. Only an access
+     * that is active in the grants table can be closed this way.
+     */
+    public function revoke(Request $request, Response $response): Response
+    {
+        return $this->guarded($request, $response, function (string $admin) use ($request, $response): Response {
+            $body = $request->getParsedBody();
+            $user = is_array($body) && is_string($body['username'] ?? null) ? $body['username'] : '';
+            $ip = is_array($body) && is_string($body['ip'] ?? null) ? $body['ip'] : '';
+            $now = $this->clock->now()->format(DATE_ATOM);
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false || !$this->db->hasActiveGrant($user, $ip, $now)) {
+                $this->flash('Цей доступ уже не активний.', 'warning');
+                return $this->redirect($response, '/admin');
+            }
+            try {
+                ($this->granter)()->revoke($user, $ip);
+                $this->audit->event('admin_revoke', $admin, $this->remote($request), ['target' => $user, 'client_ip' => $ip, 'result' => 'ok']);
+                $this->flash("Користувача {$user} ({$ip}) відключено: адресу видалено з маршрутизаторів, VPN-сесію розірвано.");
+            } catch (RouterOsException $e) {
+                $this->audit->event('admin_revoke', $admin, $this->remote($request), ['target' => $user, 'client_ip' => $ip, 'result' => 'partial']);
+                $this->flash("Користувача {$user} ({$ip}) відключено не на всіх маршрутизаторах: {$e->getMessage()}. Подробиці — у журналі (mt_error).", 'error');
+            }
+            return $this->redirect($response, '/admin');
         });
     }
 }

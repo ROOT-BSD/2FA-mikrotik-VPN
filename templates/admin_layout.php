@@ -1,5 +1,9 @@
 <?php
 /**
+ * Admin panel layout in the style of the ITSM System: Bootstrap 5, dark top menu,
+ * light background, container. No JavaScript (CSP script-src 'none'): the menu is always
+ * expanded and wraps on narrow screens.
+ *
  * @var callable(mixed): string $e
  * @var string $title
  * @var string $base
@@ -12,14 +16,26 @@
  */
 $refresh ??= false;
 $items = [
-    'dashboard' => ['/admin', 'Огляд'],
-    'mikrotik' => ['/admin/settings/mikrotik', 'MikroTik'],
-    'mail' => ['/admin/settings/mail', 'Пошта'],
-    'ad' => ['/admin/settings/ad', 'Active Directory'],
-    'logs' => ['/admin/logs', 'Журнали'],
-    'backups' => ['/admin/backups', 'Резервні копії'],
-    'update' => ['/admin/update', 'Оновлення'],
+    'dashboard' => ['/admin', 'Огляд', ['dashboard']],
+    'authenticators' => ['/admin/authenticators', 'Автентифікатори', ['authenticators']],
+    'mikrotik' => ['/admin/settings/mikrotik', 'MikroTik', ['mikrotik']],
+    'mail' => ['/admin/settings/mail', 'Пошта', ['mail']],
+    'ad' => ['/admin/settings/ad', 'Active Directory', ['ad']],
+    'logs' => ['/admin/logs', 'Журнали', ['logs', 'logs_settings']],
+    'backups' => ['/admin/backups', 'Резервні копії', ['backups', 'backup']],
+    'update' => ['/admin/update', 'Оновлення', ['update']],
 ];
+$tabs = [
+    'logs' => [['logs', '/admin/logs', 'Журнал аудиту'], ['logs_settings', '/admin/settings/logs', 'Налаштування журналів']],
+    'backups' => [['backups', '/admin/backups', 'Резервні копії'], ['backup', '/admin/settings/backup', 'Розклад і пароль']],
+];
+$group = null;
+foreach ($items as $key => $it) {
+    if (in_array($nav, $it[2], true)) {
+        $group = $key;
+    }
+}
+$flashKind = ['success' => 'success', 'warning' => 'warning', 'error' => 'danger'][$flash['kind'] ?? ''] ?? 'info';
 ?><!DOCTYPE html>
 <html lang="uk">
 <head>
@@ -31,36 +47,42 @@ $items = [
     <meta http-equiv="refresh" content="5">
 <?php endif ?>
     <title><?= $e($title) ?></title>
+    <link rel="stylesheet" href="<?= $e($base) ?>/assets/bootstrap.min.css">
     <link rel="stylesheet" href="<?= $e($base) ?>/assets/app.css">
 </head>
-<body class="admin">
-<header class="topbar">
-    <a class="brand" href="<?= $e($base) ?>/admin"><span class="logo" aria-hidden="true">V</span><span class="brand-name">VPN-GW</span><span class="brand-sub">адміністрування</span></a>
-    <div class="who">
-        <a href="<?= $e($base) ?>/admin/password" class="<?= $nav === 'password' ? 'active' : '' ?>"><?= $e($admin) ?></a>
-        <form method="post" action="<?= $e($base) ?>/admin/logout" class="inline">
-            <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
-            <button type="submit" class="btn-small ghost">Вийти</button>
-        </form>
-    </div>
-</header>
-<div class="shell">
-    <nav class="sidenav" aria-label="Розділи">
+<body class="bg-light admin d-flex flex-column min-vh-100">
+<nav class="navbar navbar-expand navbar-dark bg-dark">
+    <div class="container flex-wrap">
+        <a class="navbar-brand" href="<?= $e($base) ?>/admin">VPN-GW</a>
+        <ul class="navbar-nav me-auto flex-wrap">
 <?php foreach ($items as $key => [$href, $label]): ?>
-        <a href="<?= $e($base . $href) ?>" class="<?= $nav === $key ? 'active' : '' ?>"><?= $e($label) ?></a>
-<?php if ($key === 'logs'): ?>
-        <a href="<?= $e($base) ?>/admin/settings/logs" class="sub <?= $nav === 'logs_settings' ? 'active' : '' ?>">Налаштування журналів</a>
-<?php elseif ($key === 'backups'): ?>
-        <a href="<?= $e($base) ?>/admin/settings/backup" class="sub <?= $nav === 'backup' ? 'active' : '' ?>">Розклад і пароль</a>
-<?php endif ?>
+            <li class="nav-item"><a class="nav-link<?= $group === $key ? ' active' : '' ?>" href="<?= $e($base . $href) ?>"<?= $group === $key ? ' aria-current="page"' : '' ?>><?= $e($label) ?></a></li>
 <?php endforeach ?>
-    </nav>
-    <main class="panel">
+        </ul>
+        <div class="d-flex align-items-center">
+            <a href="<?= $e($base) ?>/admin/password" class="text-light text-decoration-none small me-3<?= $nav === 'password' ? ' fw-semibold' : '' ?>" title="Змінити пароль"><?= $e($admin) ?></a>
+            <form method="post" action="<?= $e($base) ?>/admin/logout" class="m-0">
+                <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
+                <button type="submit" class="btn btn-outline-light btn-sm">Вийти</button>
+            </form>
+        </div>
+    </div>
+</nav>
+
+<main class="container py-4 flex-grow-1">
+<?php if ($group !== null && isset($tabs[$group])): ?>
+    <ul class="nav nav-tabs mb-4">
+<?php foreach ($tabs[$group] as [$key, $href, $label]): ?>
+        <li class="nav-item"><a class="nav-link<?= $nav === $key ? ' active' : '' ?>" href="<?= $e($base . $href) ?>"<?= $nav === $key ? ' aria-current="page"' : '' ?>><?= $e($label) ?></a></li>
+<?php endforeach ?>
+    </ul>
+<?php endif ?>
 <?php if ($flash !== null): ?>
-        <div class="alert alert-<?= $e(in_array($flash['kind'], ['success', 'warning', 'error', 'info'], true) ? $flash['kind'] : 'info') ?>" role="status"><?= $e($flash['text']) ?></div>
+    <div class="alert alert-<?= $e($flashKind) ?>" role="status"><?= $e($flash['text']) ?></div>
 <?php endif ?>
 <?= $content ?>
-    </main>
-</div>
+</main>
+
+<footer class="text-center text-muted small py-3">VPN-GW v<?= $e(\VpnGw\Version::CURRENT) ?></footer>
 </body>
 </html>

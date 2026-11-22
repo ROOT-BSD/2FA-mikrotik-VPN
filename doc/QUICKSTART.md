@@ -1,6 +1,6 @@
 # VPN-GW: встановлення на новий сервер — швидкий гайд
 
-**VPN-GW 0.7 · 21.11.2026** · Послідовність команд від щойно встановленого Debian 13 без додаткового ПЗ до робочого порталу. Подробиці кожного кроку — `INSTALL_GUIDE.md`, робота в панелі адміністратора — `ADMIN_GUIDE.md`.
+**VPN-GW 0.10 · 22.11.2026** · Послідовність команд від щойно встановленого Debian 13 без додаткового ПЗ до робочого порталу. Подробиці кожного кроку — `INSTALL_GUIDE.md`, робота в панелі адміністратора — `ADMIN_GUIDE.md`.
 
 Час: близько 30–40 хвилин (без підготовки MikroTik і сертифікатів).
 
@@ -17,7 +17,7 @@
 | Дані AD: домен і назва групи VPN | `nerc.gov.ua`, `VPN-Users` |
 | MikroTik: адреси, доступ адміністратора | `10.0.10.1` (v7), `10.0.20.1` (v6) |
 | ПК адміністратора у внутрішній мережі (для панелі адміністратора) | `10.0.50.0/24` |
-| Архів з кодом і файл контрольної суми | `vpn-gw-0.7.zip`, `vpn-gw-0.7.zip.sha256` |
+| Архів з кодом і файл контрольної суми | `vpn-gw-0.10.zip`, `vpn-gw-0.10.zip.sha256` |
 
 > Усі команди нижче виконуються від **root**. Якщо в системі є `sudo` — `sudo -i`; якщо під час встановлення Debian задано пароль root — `su -`.
 
@@ -62,16 +62,16 @@ update-ca-certificates
 
 Скопіюйте на сервер архів і файл контрольної суми, наприклад у `/tmp`:
 - з Windows — WinSCP (протокол SFTP) або `scp` у PowerShell;
-- з Linux / macOS: `scp vpn-gw-0.7.zip vpn-gw-0.7.zip.sha256 admin@10.0.10.20:/tmp/`
+- з Linux / macOS: `scp vpn-gw-0.10.zip vpn-gw-0.10.zip.sha256 admin@10.0.10.20:/tmp/`
 
 На сервері перевірте цілісність і розпакуйте:
 ```bash
-cd /tmp && sha256sum -c vpn-gw-0.7.zip.sha256          # має бути: vpn-gw-0.7.zip: OK
-cd /root && unzip -q /tmp/vpn-gw-0.7.zip && cd vpn-gw-0.7
+cd /tmp && sha256sum -c vpn-gw-0.10.zip.sha256          # має бути: vpn-gw-0.10.zip: OK
+cd /root && unzip -q /tmp/vpn-gw-0.10.zip && cd vpn-gw-0.10
 ```
-**Очікувано:** `sha256sum` → `OK`; `cat VERSION` → `0.7`; у каталозі є `install.sh`.
+**Очікувано:** `sha256sum` → `OK`; `cat VERSION` → `0.10`; у каталозі є `install.sh`.
 
-> Усі наступні команди `./install.sh …` виконуйте з каталогу `/root/vpn-gw-0.7`.
+> Усі наступні команди `./install.sh …` виконуйте з каталогу `/root/vpn-gw-0.8`.
 
 ---
 
@@ -187,7 +187,7 @@ apt install -y unattended-upgrades && dpkg-reconfigure -plow unattended-upgrades
 **Протокол SSH:**
 1. Відкрийте `deploy/mikrotik/routeros-ssh.rsc`, замініть адреси і пароль, вставте команди (замість розділів «management service» і «dedicated account» з `routeros7.rsc` / `routeros6.rsc`; розділи L2TP/IPsec і firewall з них теж потрібні).
 2. Вхід за ключем (рекомендовано): на сервері `ssh-keygen -t ed25519 -N "" -C vpn-gw -f vpn-gw-mikrotik` (для RouterOS 6 — `-t rsa -b 4096 -m PEM`), відкритий ключ — на маршрутизатор (`/user ssh-keys import`), приватний — у панель (**SSH: приватний ключ**), потім видаліть обидва файли.
-3. У панелі для маршрутизатора виберіть протокол **SSH**, порт 22, задайте користувача й пароль у рядку маршрутизатора або заповніть **SSH: типовий користувач** і пароль чи ключ, «Зберегти».
+3. Панель → **MikroTik** → «Редагувати» на картці маршрутизатора (або «+ Додати маршрутизатор»): протокол **SSH**, порт 22, користувач і пароль, «Зберегти». Вхід за ключем — спільний ключ у `.env` (`MT_SSH_KEY`).
 
 В обох випадках правила **drop** створюються **вимкненими** — VPN працює як раніше.
 
@@ -271,7 +271,7 @@ sudo -u vpngw php /srv/vpn-gw/bin/settings.php reset MT_LIST           # пов�
 sudo php /srv/vpn-gw/bin/agent.php backup                              # резервна копія зараз
 sudo php /srv/vpn-gw/bin/restore.php /var/backups/vpn-gw/<файл>.vgbk   # вміст копії (--apply — відновити)
 sudo -u vpngw php /srv/vpn-gw/bin/unlock.php --user ivanenko --by admin
-sudo -u vpngw php /srv/vpn-gw/bin/totp-reset.php --user ivanenko --by admin
+sudo -u vpngw php /srv/vpn-gw/bin/totp-reset.php --user ivanenko --by admin   # або панель → «Автентифікатори»
 systemctl restart php8.4-fpm apache2
 ```
 

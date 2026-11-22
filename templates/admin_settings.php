@@ -1,6 +1,7 @@
 <?php
 /**
  * @var callable(mixed): string $e
+ * @var callable(mixed, bool=): string $dt
  * @var string $base
  * @var string $csrf
  * @var string $section
@@ -8,7 +9,8 @@
  * @var array<string, string> $values
  * @var array<string, string> $sources
  * @var array<string, bool> $secretSet
- * @var list<array<string, mixed>> $routers
+ * @var list<array<string, mixed>> $routers  rows of the cards (as entered, on an error)
+ * @var list<array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string}> $savedRouters
  * @var array<string, string> $categories
  * @var array<string, array{updated_at: string, updated_by: string}> $meta
  * @var array<string, string> $hostKeys
@@ -29,120 +31,113 @@ $plural = static function (int $n, string $one, string $few, string $many): stri
 };
 $action = $base . '/admin/settings/' . $section;
 $srcLabel = ['panel' => 'змінено в панелі', 'env' => 'з .env', 'default' => 'типове'];
-$rows = $routers;
-for ($i = count($rows); $i < count($routers) + 2; $i++) {
-    $rows[] = ['name' => '', 'host' => '', 'version' => 7, 'port' => '', 'transport' => 'api', 'user' => '', 'list' => ''];
-}
 ?>
-<h1><?= $e($schema['title']) ?></h1>
-<p class="muted"><?= $e($schema['intro']) ?></p>
+<h3 class="mb-2"><?= $e($schema['title']) ?></h3>
+<p class="text-muted"><?= $e($schema['intro']) ?></p>
 <?php if ($error !== null): ?>
-    <div class="alert alert-error" role="alert">Не збережено: <?= $e($error) ?></div>
+    <div class="alert alert-danger" role="alert">Не збережено: <?= $e($error) ?></div>
 <?php endif ?>
 <?php if ($results !== null): ?>
-    <section class="box">
-        <h2>Результат перевірки</h2>
-        <ul class="checks">
+    <div class="card mb-4">
+        <div class="card-header">Результат перевірки</div>
+        <ul class="list-group list-group-flush checks">
 <?php foreach ($results as $r): ?>
-            <li class="<?= $r['ok'] ? 'ok' : 'fail' ?>"><strong><?= $e($r['name']) ?>:</strong> <?= $e($r['message']) ?></li>
+            <li class="list-group-item <?= $r['ok'] ? 'ok list-group-item-success' : 'fail list-group-item-danger' ?>"><strong><?= $e($r['name']) ?>:</strong> <?= $e($r['message']) ?></li>
 <?php endforeach ?>
 <?php if ($results === []): ?>
-            <li class="fail">Немає що перевіряти.</li>
+            <li class="list-group-item fail list-group-item-danger">Немає що перевіряти.</li>
 <?php endif ?>
         </ul>
-    </section>
+    </div>
 <?php endif ?>
 
-<form method="post" action="<?= $e($action) ?>" class="form" autocomplete="off">
+<form method="post" action="<?= $e($action) ?>" class="settings-form" autocomplete="off">
     <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
-    <button type="submit" name="action" value="save" class="sr-only" tabindex="-1" aria-hidden="true">Зберегти</button>
+    <button type="submit" name="action" value="save" class="visually-hidden" tabindex="-1" aria-hidden="true">Зберегти</button>
+<?php $cardOpen = false; $prevType = ''; ?>
 <?php foreach ($schema['fields'] as $f): $k = $f['key']; $id = 'f_' . strtolower($k); ?>
-<?php if ($f['type'] === 'hostkeys' || $f['type'] === 'routerpasswords') { continue; } ?>
-<?php if (isset($f['group'])): ?>
-    <h2 class="group"><?= $e($f['group']) ?></h2>
-<?php endif ?>
-    <div class="field">
-        <div class="field-head">
-            <label for="<?= $e($id) ?>"><?= $e($f['label']) ?></label>
-            <span class="src src-<?= $e($sources[$k]) ?>" title="<?= isset($meta[$k]) ? $e('Змінив ' . $meta[$k]['updated_by'] . ' ' . $meta[$k]['updated_at']) : '' ?>"><code><?= $e($k) ?></code> · <?= $e($srcLabel[$sources[$k]] ?? '') ?></span>
+<?php if ($f['type'] === 'hostkeys' || $f['type'] === 'routerpasswords' || ($f['hidden'] ?? false)) { continue; } ?>
+<?php if (!$cardOpen || isset($f['group']) || $f['type'] === 'routers' || $prevType === 'routers'): ?>
+<?php if ($cardOpen): ?>
         </div>
-<?php if ($f['type'] === 'routers'): ?>
-        <table class="table routers">
-            <thead><tr><th>Назва</th><th>Адреса (IP / DNS)</th><th>Версія</th><th>Протокол</th><th>Порт</th><th>Користувач</th><th>Пароль</th><th>Ключ SSH</th><th>Видалити</th></tr></thead>
-            <tbody>
-<?php foreach ($rows as $i => $r): ?>
-<?php $rn = (string) ($r['name'] ?? ''); $tr = ($r['transport'] ?? 'api') === 'ssh' ? 'ssh' : 'api'; $hasOwn = $rn !== '' && in_array($rn, $ownPasswords, true); ?>
-                <tr>
-                    <td><input type="hidden" name="routers[<?= $e($i) ?>][orig]" value="<?= $e($rn) ?>"><input name="routers[<?= $e($i) ?>][name]" value="<?= $e($r['name'] ?? '') ?>" maxlength="32" pattern="[A-Za-z0-9_\-]*" aria-label="Назва"></td>
-                    <td><input name="routers[<?= $e($i) ?>][host]" value="<?= $e($r['host'] ?? '') ?>" maxlength="253" aria-label="Адреса"></td>
-                    <td><select name="routers[<?= $e($i) ?>][version]" aria-label="Версія">
-                        <option value="7"<?= ($r['version'] ?? 7) === 7 ? ' selected' : '' ?>>RouterOS 7</option>
-                        <option value="6"<?= ($r['version'] ?? 7) === 6 ? ' selected' : '' ?>>RouterOS 6</option>
-                    </select></td>
-                    <td><select name="routers[<?= $e($i) ?>][transport]" aria-label="Протокол">
-                        <option value="api"<?= ($r['transport'] ?? 'api') === 'api' ? ' selected' : '' ?>>API</option>
-                        <option value="ssh"<?= ($r['transport'] ?? 'api') === 'ssh' ? ' selected' : '' ?>>SSH</option>
-                    </select></td>
-                    <td><input name="routers[<?= $e($i) ?>][port]" value="<?= $e($r['port'] ?? '') ?>" maxlength="5" inputmode="numeric" class="w-port" aria-label="Порт" placeholder="<?= ($r['name'] ?? '') === '' ? '443' : '' ?>"></td>
-                    <td><input name="routers[<?= $e($i) ?>][user]" value="<?= $e($r['user'] ?? '') ?>" maxlength="64" class="w-user" aria-label="Користувач" autocomplete="off" spellcheck="false" placeholder="<?= $e($commonUsers[$tr] !== '' ? $commonUsers[$tr] : 'типовий') ?>" title="<?= $e('Порожньо — типовий користувач ' . ($tr === 'ssh' ? 'SSH' : 'API') . ($commonUsers[$tr] !== '' ? ': ' . $commonUsers[$tr] : '')) ?>"></td>
-                    <td class="pw"><input type="password" name="routers[<?= $e($i) ?>][password]" maxlength="256" class="w-pass" aria-label="Пароль" autocomplete="new-password" placeholder="<?= $hasOwn ? '•••• власний' : 'типовий' ?>">
-<?php if ($hasOwn): ?>
-                        <label class="check small"><input type="checkbox" name="routers[<?= $e($i) ?>][clear_password]" value="1"> типовий</label>
-<?php endif ?></td>
-                    <td class="fp"><?php if (($r['transport'] ?? 'api') === 'ssh' && ($r['name'] ?? '') !== ''): ?>
-<?php if (isset($hostKeys[$r['name']])): ?>
-                        <code title="<?= $e($hostKeys[$r['name']]) ?>"><?= $e(substr($hostKeys[$r['name']], 0, 19)) ?>…</code>
-                        <label class="check small"><input type="checkbox" name="routers[<?= $e($i) ?>][reset_key]" value="1"> скинути</label>
-<?php else: ?>
-                        <span class="badge warn">не підтверджено</span>
+    </div>
+<?php endif; $cardOpen = true; ?>
+    <div class="<?= $f['type'] === 'routers' ? 'mb-4' : 'card mb-4' ?>">
+<?php if ($f['type'] !== 'routers'): ?>
+        <div class="card-header"><?= $e($f['group'] ?? 'Основні параметри') ?></div>
 <?php endif ?>
-<?php endif ?></td>
-                    <td class="center"><?php if (($r['name'] ?? '') !== ''): ?><input type="checkbox" name="routers[<?= $e($i) ?>][delete]" value="1" aria-label="Видалити"><?php endif ?></td>
-                </tr>
-<?php $own = (string) ($r['list'] ?? ''); $defList = $values['MT_LIST'] ?? ''; $loaded = $mtLists !== null && $rn !== '' && in_array($rn, $mtLists['routers'], true); ?>
-                <tr class="sub">
-                    <td colspan="10">
-                        <span class="sub-label">Address-list:</span>
-<?php if ($loaded):
-    $mine = [];
-    foreach ($mtLists['lists'] as $ln => $per) {
-        if (isset($per[$rn])) {
-            $mine[$ln] = $per[$rn];
-        }
-    }
-    $info = static fn (array $x): string => $plural($x['entries'], 'адреса', 'адреси', 'адрес') . ', ' . $plural($x['rules'], 'правило', 'правила', 'правил');
+        <div class="<?= $f['type'] === 'routers' ? '' : 'card-body' ?>">
+<?php endif; $prevType = $f['type']; ?>
+    <div class="field mb-3">
+        <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-2">
+            <label for="<?= $e($id) ?>" class="form-label fw-semibold mb-1"><?= $e($f['label']) ?></label>
+            <span class="small text-muted src src-<?= $e($sources[$k]) ?>" title="<?= isset($meta[$k]) ? $e('Змінив ' . $meta[$k]['updated_by'] . ' ' . $dt($meta[$k]['updated_at'])) : '' ?>"><code><?= $e($k) ?></code> · <?= $sources[$k] === 'panel' ? '<span class="badge bg-primary-subtle text-primary-emphasis">' . $e($srcLabel['panel']) . '</span>' : $e($srcLabel[$sources[$k]] ?? '') ?></span>
+        </div>
+<?php if ($f['type'] === 'routers'):
+    $defList = $values['MT_LIST'] ?? '';
 ?>
-                        <select name="routers[<?= $e($i) ?>][list]" class="w-list" aria-label="Address-list <?= $e($rn) ?>">
-                            <option value=""<?= $own === '' ? ' selected' : '' ?>>типовий: <?= $e($defList) ?> — <?= $e(isset($mine[$defList]) ? $info($mine[$defList]) : 'на маршрутизаторі немає') ?></option>
-<?php if ($own !== '' && !isset($mine[$own])): ?>
-                            <option value="<?= $e($own) ?>" selected><?= $e($own) ?> — на маршрутизаторі не знайдено</option>
+        <div class="row g-3 router-cards">
+<?php foreach ($savedRouters as $r): $rn = $r['name']; $tr = $r['transport'] === 'ssh' ? 'ssh' : 'api'; ?>
+            <div class="col-md-6 col-xl-4">
+                <div class="card h-100 router-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><?= $e($rn) ?></span>
+<?php if ($tr === 'ssh'): ?>
+                        <?= isset($hostKeys[$rn]) ? '<span class="badge bg-success">ключ підтверджено</span>' : '<span class="badge bg-warning text-dark">ключ не підтверджено</span>' ?>
 <?php endif ?>
-<?php foreach ($mine as $ln => $x): ?>
-                            <option value="<?= $e($ln) ?>"<?= $ln === $own ? ' selected' : '' ?>><?= $e($ln . ' — ' . $info($x)) ?></option>
+                    </div>
+                    <div class="card-body">
+                        <dl class="row g-2 mb-0 router-facts">
+                            <dt class="col-5">Назва</dt><dd class="col-7"><?= $e($rn) ?></dd>
+                            <dt class="col-5">Адреса (IP / DNS)</dt><dd class="col-7 host"><?= $e($r['host']) ?></dd>
+                            <dt class="col-5">Версія RouterOS</dt><dd class="col-7"><?= $e($r['version']) ?></dd>
+                            <dt class="col-5">Протокол підключення</dt><dd class="col-7"><?= $tr === 'ssh' ? 'SSH' : 'API (' . ($r['version'] === 6 ? 'API-SSL' : 'REST') . ')' ?></dd>
+                            <dt class="col-5">Address-list</dt><dd class="col-7 address-list"><strong><?= $e($r['list'] !== '' ? $r['list'] : $defList) ?></strong><?= $r['list'] === '' ? ' <span class="text-muted small fw-normal">(типовий)</span>' : '' ?></dd>
+                        </dl>
+                    </div>
+                    <div class="card-footer bg-transparent">
+                        <a href="<?= $e($base) ?>/admin/routers/edit/<?= $e($rn) ?>" class="btn btn-outline-primary btn-sm">Редагувати</a>
+                    </div>
+                </div>
+            </div>
 <?php endforeach ?>
-                            <option value="__new">інший / новий…</option>
-                        </select>
-                        <input name="routers[<?= $e($i) ?>][list_new]" maxlength="64" class="w-listnew" spellcheck="false" placeholder="назва, якщо «інший / новий»" aria-label="Новий address-list <?= $e($rn) ?>">
-<?php else: ?>
-                        <input name="routers[<?= $e($i) ?>][list]" value="<?= $e($own) ?>" maxlength="64" class="w-listnew" spellcheck="false" placeholder="типовий: <?= $e($defList) ?>" aria-label="Address-list">
-<?php if ($mtLists !== null && $rn !== ''): ?>
-                        <span class="badge warn">списки не прочитано</span>
-<?php endif ?>
-<?php endif ?>
-                    </td>
-                </tr>
+            <div class="col-md-6 col-xl-4">
+                <a href="<?= $e($base) ?>/admin/routers/add" class="card h-100 router-card border-dashed text-decoration-none d-flex align-items-center justify-content-center add-router">
+                    <span class="py-4 text-primary">+ Додати маршрутизатор</span>
+                </a>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">Підключені маршрутизатори</div>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0 connected-routers">
+                    <thead class="table-light"><tr><th>Назва</th><th>Адреса</th><th>RouterOS</th><th>Протокол</th><th>Користувач</th><th>Address-list</th><th>Ключ SSH</th><th></th></tr></thead>
+                    <tbody>
+<?php foreach ($savedRouters as $r): $rn = $r['name']; $tr = $r['transport'] === 'ssh' ? 'ssh' : 'api'; ?>
+                        <tr>
+                            <td class="fw-semibold"><?= $e($rn) ?></td>
+                            <td><code><?= $e($r['host']) ?>:<?= $e($r['port']) ?></code></td>
+                            <td><?= $e($r['version']) ?></td>
+                            <td><?= $tr === 'ssh' ? 'SSH' : 'API' ?></td>
+                            <td><?= $r['user'] !== '' ? $e($r['user']) : '<span class="text-muted">типовий</span>' ?><?= in_array($rn, $ownPasswords, true) ? ' <span class="badge bg-light text-dark border">свій пароль</span>' : '' ?></td>
+                            <td><?= $r['list'] !== '' ? $e($r['list']) : '<span class="text-muted">' . $e($defList) . '</span>' ?></td>
+                            <td><?= $tr !== 'ssh' ? '<span class="text-muted">—</span>' : (isset($hostKeys[$rn]) ? '<span class="badge bg-success">підтверджено</span>' : '<span class="badge bg-warning text-dark">не підтверджено</span>') ?></td>
+                            <td class="text-end"><button type="submit" form="router-delete" name="router" value="<?= $e($rn) ?>" class="btn btn-outline-danger btn-sm py-0"<?= count($savedRouters) < 2 ? ' disabled title="Єдиний маршрутизатор видалити не можна"' : '' ?>>Видалити</button></td>
+                        </tr>
 <?php endforeach ?>
-            </tbody>
-        </table>
-        <p><button type="submit" name="action" value="lists" class="btn-inline secondary small-btn" formnovalidate>Вибрати списки з MikroTik</button></p>
-        <p class="help">Користувач і пароль — власні облікові дані маршрутизатора; порожньо — типові для його протоколу (розділи «API» і «SSH» нижче; сірим у полі показано типового користувача). Address-list — список цього маршрутизатора, у який портал додає IP; порожньо — типовий (нижче). Кнопка «Вибрати з MikroTik» показує списки кожного маршрутизатора (спершу збережіть зміни в таблиці). Збережений пароль не показується: залиште поле порожнім, щоб не змінювати, або позначте «типовий», щоб видалити власний пароль. Після зміни адреси чи порту пароль треба ввести ще раз. Порожні рядки ігноруються. Типові порти: REST (www-ssl) — 443, API-SSL — 8729, SSH — 22. Ключ SSH маршрутизатора запам’ятовується кнопкою «Перевірити MikroTik»; доки він не підтверджений, портал до цього маршрутизатора не підключається. Зміна адреси чи порту скидає збережений ключ.</p>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-footer small text-muted">«Видалити» одразу прибирає маршрутизатор з налаштувань разом з його власним паролем і ключем SSH; інші незбережені зміни на сторінці не застосовуються. Адреси, які портал уже додав на цьому MikroTik, той видалить сам після тайм-ауту.</div>
+        </div>
 <?php elseif ($f['type'] === 'mtlist' && $mtLists === null): ?>
-        <div class="inline-row">
-            <input id="<?= $e($id) ?>" name="<?= $e($k) ?>" value="<?= $e($values[$k]) ?>" maxlength="64" spellcheck="false">
-            <button type="submit" name="action" value="lists" class="btn-inline secondary" formnovalidate>Вибрати з MikroTik</button>
+        <div class="input-group form-card-md">
+            <input id="<?= $e($id) ?>" name="<?= $e($k) ?>" value="<?= $e($values[$k]) ?>" maxlength="64" spellcheck="false" class="form-control">
+            <button type="submit" name="action" value="lists" class="btn btn-outline-primary" formnovalidate>Вибрати з MikroTik</button>
         </div>
 <?php elseif ($f['type'] === 'mtlist'): $cur = $values[$k]; $okRouters = $mtLists['routers']; ?>
-        <select id="<?= $e($id) ?>" name="<?= $e($k) ?>">
+        <select id="<?= $e($id) ?>" name="<?= $e($k) ?>" class="form-select">
 <?php if ($cur !== '' && !isset($mtLists['lists'][$cur])): ?>
             <option value="<?= $e($cur) ?>" selected><?= $e($cur) ?> — поточний; на маршрутизаторах не знайдено</option>
 <?php endif ?>
@@ -157,13 +152,13 @@ for ($i = count($rows); $i < count($routers) + 2; $i++) {
 <?php endforeach ?>
             <option value="__new">Новий список (ввести назву нижче)…</option>
         </select>
-        <input name="<?= $e($k) ?>__new" maxlength="64" spellcheck="false" class="mt-new" placeholder="назва нового списку — лише якщо вибрано «Новий список»" aria-label="Назва нового списку">
-        <p class="help">Прочитано з: <?= $e($okRouters === [] ? 'жодного маршрутизатора' : implode(', ', $okRouters)) ?>. «Правила» — скільки правил firewall (filter, nat, mangle, raw) посилаються на список: портал має працювати зі списком, який використовується в правилі, що дозволяє L2TP/IPsec. Список без адрес — нормально: адреси з’являються після входу користувачів. Вибір застосовується після «Зберегти».</p>
+        <input name="<?= $e($k) ?>__new" maxlength="64" spellcheck="false" class="form-control mt-2 mt-new" placeholder="назва нового списку — лише якщо вибрано «Новий список»" aria-label="Назва нового списку">
+        <p class="form-text">Прочитано з: <?= $e($okRouters === [] ? 'жодного маршрутизатора' : implode(', ', $okRouters)) ?>. «Правила» — скільки правил firewall (filter, nat, mangle, raw) посилаються на список: портал має працювати зі списком, який використовується в правилі, що дозволяє L2TP/IPsec. Список без адрес — нормально: адреси з’являються після входу користувачів. Вибір застосовується після «Зберегти».</p>
 <?php elseif ($f['type'] === 'bool'): ?>
         <input type="hidden" name="<?= $e($k) ?>" value="0">
-        <label class="check"><input type="checkbox" id="<?= $e($id) ?>" name="<?= $e($k) ?>" value="1"<?= filter_var($values[$k], FILTER_VALIDATE_BOOL) ? ' checked' : '' ?>> увімкнено</label>
+        <div class="form-check form-switch"><input class="form-check-input" type="checkbox" role="switch" id="<?= $e($id) ?>" name="<?= $e($k) ?>" value="1"<?= filter_var($values[$k], FILTER_VALIDATE_BOOL) ? ' checked' : '' ?>><label class="form-check-label" for="<?= $e($id) ?>">увімкнено</label></div>
 <?php elseif ($f['type'] === 'select'): ?>
-        <select id="<?= $e($id) ?>" name="<?= $e($k) ?>">
+        <select id="<?= $e($id) ?>" name="<?= $e($k) ?>" class="form-select form-card-md">
 <?php foreach ($f['options'] ?? [] as $ov => $ol): ?>
             <option value="<?= $e($ov) ?>"<?= $values[$k] === $ov ? ' selected' : '' ?>><?= $e($ol) ?></option>
 <?php endforeach ?>
@@ -171,66 +166,78 @@ for ($i = count($rows); $i < count($routers) + 2; $i++) {
 <?php elseif ($f['type'] === 'categories'): $picked = array_map('trim', explode(',', $values[$k])); ?>
         <div class="checklist">
 <?php foreach ($categories as $cv => $cl): $fixed = in_array($cv, ['admin', 'system'], true); ?>
-            <label class="check"><input type="checkbox" name="<?= $e($k) ?>[]" value="<?= $e($cv) ?>"<?= $fixed || in_array($cv, $picked, true) ? ' checked' : '' ?><?= $fixed ? ' disabled' : '' ?>> <?= $e($cl) ?></label>
+            <div class="form-check"><input class="form-check-input" type="checkbox" id="cat_<?= $e($cv) ?>" name="<?= $e($k) ?>[]" value="<?= $e($cv) ?>"<?= $fixed || in_array($cv, $picked, true) ? ' checked' : '' ?><?= $fixed ? ' disabled' : '' ?>><label class="form-check-label" for="cat_<?= $e($cv) ?>"><?= $e($cl) ?></label></div>
 <?php endforeach ?>
         </div>
 <?php elseif ($f['type'] === 'secretarea'): ?>
-        <textarea id="<?= $e($id) ?>" name="<?= $e($k) ?>" rows="5" spellcheck="false" autocomplete="off" placeholder="<?= ($secretSet[$k] ?? false) ? 'ключ задано; залиште порожнім, щоб не змінювати' : '-----BEGIN OPENSSH PRIVATE KEY----- …' ?>"></textarea>
+        <textarea id="<?= $e($id) ?>" name="<?= $e($k) ?>" class="form-control font-monospace small" rows="5" spellcheck="false" autocomplete="off" placeholder="<?= ($secretSet[$k] ?? false) ? 'ключ задано; залиште порожнім, щоб не змінювати' : '-----BEGIN OPENSSH PRIVATE KEY----- …' ?>"></textarea>
 <?php if ($secretSet[$k] ?? false): ?>
-        <label class="check small"><input type="checkbox" name="<?= $e($k) ?>__clear" value="1"> очистити</label>
+        <div class="form-check small mt-1"><input class="form-check-input" type="checkbox" id="<?= $e($id) ?>__clear" name="<?= $e($k) ?>__clear" value="1"><label class="form-check-label" for="<?= $e($id) ?>__clear">очистити</label></div>
 <?php endif ?>
 <?php elseif ($f['type'] === 'secret'): ?>
-        <input id="<?= $e($id) ?>" name="<?= $e($k) ?>" type="password" maxlength="256" autocomplete="new-password" placeholder="<?= ($secretSet[$k] ?? false) ? '•••••••• (задано; залиште порожнім, щоб не змінювати)' : 'не задано' ?>">
+        <input id="<?= $e($id) ?>" name="<?= $e($k) ?>" type="password" class="form-control form-card-md" maxlength="256" autocomplete="new-password" placeholder="<?= ($secretSet[$k] ?? false) ? '•••••••• (задано; залиште порожнім, щоб не змінювати)' : 'не задано' ?>">
 <?php if ($secretSet[$k] ?? false): ?>
-        <label class="check small"><input type="checkbox" name="<?= $e($k) ?>__clear" value="1"> очистити</label>
+        <div class="form-check small mt-1"><input class="form-check-input" type="checkbox" id="<?= $e($id) ?>__clear" name="<?= $e($k) ?>__clear" value="1"><label class="form-check-label" for="<?= $e($id) ?>__clear">очистити</label></div>
 <?php endif ?>
 <?php else: ?>
-        <input id="<?= $e($id) ?>" name="<?= $e($k) ?>" value="<?= $e($values[$k]) ?>" maxlength="1024"<?= $f['type'] === 'int' ? ' inputmode="numeric"' : '' ?>>
+        <input id="<?= $e($id) ?>" name="<?= $e($k) ?>" value="<?= $e($values[$k]) ?>" maxlength="1024" class="form-control<?= $f['type'] === 'int' ? ' form-card-xs" inputmode="numeric' : ' form-card-md' ?>">
 <?php endif ?>
 <?php if (isset($f['help'])): ?>
-        <p class="help"><?= $e($f['help']) ?></p>
+        <div class="form-text"><?= $e($f['help']) ?></div>
 <?php endif ?>
 <?php if ($sources[$k] === 'panel'): ?>
-        <button type="submit" name="action" value="reset:<?= $e($k) ?>" class="link small" formnovalidate>повернути значення з .env</button>
+        <button type="submit" name="action" value="reset:<?= $e($k) ?>" class="btn btn-link btn-sm p-0" formnovalidate>повернути значення з .env</button>
 <?php endif ?>
     </div>
 <?php endforeach ?>
-    <div class="actions">
-        <button type="submit" name="action" value="save" class="btn-inline">Зберегти</button>
+<?php if ($cardOpen): ?>
+        </div>
+    </div>
+<?php endif ?>
+    <div class="actions mb-4">
+        <button type="submit" name="action" value="save" class="btn btn-primary">Зберегти</button>
     </div>
 </form>
+<?php if ($section === 'mikrotik'): ?>
+<form method="post" action="<?= $e($action) ?>" id="router-delete" class="d-none">
+    <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
+    <input type="hidden" name="action" value="delete_router">
+</form>
+<?php endif ?>
 
 <?php if ($section === 'mikrotik'): ?>
-<section class="box">
-    <h2>Перевірка з’єднання</h2>
-    <p class="muted small">Підключається до кожного маршрутизатора зі збереженими налаштуваннями і читає address-list. Нічого не змінює.</p>
-    <form method="post" action="<?= $e($action) ?>">
-        <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
-        <button type="submit" name="action" value="test" class="btn-inline secondary">Перевірити MikroTik</button>
-    </form>
-</section>
+<div class="card mb-4">
+    <div class="card-header">Перевірка з’єднання</div>
+    <div class="card-body">
+        <p class="small text-muted">Підключається до кожного маршрутизатора зі збереженими налаштуваннями і читає його address-list. Нічого не змінює.</p>
+        <form method="post" action="<?= $e($action) ?>">
+            <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
+            <button type="submit" name="action" value="test" class="btn btn-outline-primary btn-sm">Перевірити MikroTik</button>
+        </form>
+    </div>
+</div>
 <?php elseif ($section === 'ad'): ?>
-<section class="box">
-    <h2>Перевірка входу</h2>
-    <p class="muted small">Вхід тестовим обліковим записом зі збереженими налаштуваннями. Перевіряє з’єднання з контролером домену у вибраному режимі, пароль і членство в групі VPN. Пароль ніде не зберігається.</p>
-    <form method="post" action="<?= $e($action) ?>" class="form inline-form" autocomplete="off">
-        <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
-        <input name="test_user" placeholder="user або user@домен" maxlength="64" aria-label="Логін" autocapitalize="none" spellcheck="false">
-        <input name="test_password" type="password" placeholder="пароль" maxlength="256" aria-label="Пароль" autocomplete="off">
-        <button type="submit" name="action" value="test" class="btn-inline secondary">Перевірити AD</button>
-    </form>
-</section>
+<div class="card mb-4">
+    <div class="card-header">Перевірка входу</div>
+    <div class="card-body">
+        <p class="small text-muted">Вхід тестовим обліковим записом зі збереженими налаштуваннями. Перевіряє з’єднання з контролером домену у вибраному режимі, пароль і членство в групі VPN. Пароль ніде не зберігається.</p>
+        <form method="post" action="<?= $e($action) ?>" class="row g-2 align-items-center" autocomplete="off">
+            <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
+            <div class="col-md-4"><input name="test_user" class="form-control form-control-sm" placeholder="user або user@домен" maxlength="64" aria-label="Логін" autocapitalize="none" spellcheck="false"></div>
+            <div class="col-md-4"><input name="test_password" type="password" class="form-control form-control-sm" placeholder="пароль" maxlength="256" aria-label="Пароль" autocomplete="off"></div>
+            <div class="col-md-auto"><button type="submit" name="action" value="test" class="btn btn-outline-primary btn-sm">Перевірити AD</button></div>
+        </form>
+    </div>
+</div>
 <?php elseif ($section === 'mail'): ?>
-<section class="box">
-    <h2>Тестовий лист</h2>
-    <form method="post" action="<?= $e($action) ?>" class="form inline-form" autocomplete="off">
-        <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
-        <input name="test_to" type="email" placeholder="адреса отримувача" maxlength="254" aria-label="Адреса">
-        <button type="submit" name="action" value="test" class="btn-inline secondary">Надіслати</button>
-    </form>
-</section>
-<?php elseif ($section === 'logs'): ?>
-<p><a href="<?= $e($base) ?>/admin/logs">Переглянути журнал →</a></p>
-<?php elseif ($section === 'backup'): ?>
-<p><a href="<?= $e($base) ?>/admin/backups">Список резервних копій →</a></p>
+<div class="card mb-4">
+    <div class="card-header">Тестовий лист</div>
+    <div class="card-body">
+        <form method="post" action="<?= $e($action) ?>" class="row g-2 align-items-center" autocomplete="off">
+            <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
+            <div class="col-md-5"><input name="test_to" type="email" class="form-control form-control-sm" placeholder="адреса отримувача" maxlength="254" aria-label="Адреса"></div>
+            <div class="col-md-auto"><button type="submit" name="action" value="test" class="btn btn-outline-primary btn-sm">Надіслати</button></div>
+        </form>
+    </div>
+</div>
 <?php endif ?>

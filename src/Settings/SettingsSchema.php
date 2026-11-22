@@ -10,7 +10,7 @@ namespace VpnGw\Settings;
  * stays in .env only: changing those from the web could lock the administrator out
  * or let a web compromise disable protections.
  *
- * @phpstan-type Field array{key: string, label: string, type: string, help?: string, group?: string, options?: array<string, string>}
+ * @phpstan-type Field array{key: string, label: string, type: string, help?: string, group?: string, options?: array<string, string>, hidden?: bool}
  * @phpstan-type Section array{title: string, intro: string, fields: list<Field>}
  */
 final class SettingsSchema
@@ -38,21 +38,25 @@ final class SettingsSchema
     public const SECTIONS = [
         'mikrotik' => [
             'title' => 'Підключення до MikroTik',
-            'intro' => 'Протокол для кожного маршрутизатора: API (RouterOS 7 — REST через www-ssl, RouterOS 6 — API-SSL; сертифікат від корпоративного CA) або SSH (RouterOS 6 і 7; перевірка ключа хоста). Кожен маршрутизатор може мати власні користувача й пароль; якщо їх не задано — використовуються типові для його протоколу (нижче). Параметри підключення зберігаються зашифрованими.',
+            'intro' => 'Картка на кожен маршрутизатор: назва, адреса, версія RouterOS і протокол (API — REST / API-SSL з сертифікатом корпоративного CA, або SSH з перевіркою ключа хоста). Параметри підключення змінюються на сторінці маршрутизатора — кнопка «Редагувати». Параметри підключення зберігаються зашифрованими.',
             'fields' => [
                 ['key' => 'ROUTERS', 'label' => 'Маршрутизатори', 'type' => 'routers'],
                 ['key' => 'MT_SSH_HOSTKEYS', 'label' => 'Ключі SSH маршрутизаторів', 'type' => 'hostkeys'],
                 ['key' => 'ROUTER_PASSWORDS', 'label' => 'Паролі маршрутизаторів', 'type' => 'routerpasswords'],
-                ['key' => 'MT_LIST', 'label' => 'Типовий address-list', 'type' => 'mtlist', 'help' => 'Список для маршрутизаторів, у яких у таблиці не вибрано власний. На нього мають посилатися правила firewall (src-address-list). Кнопка «Вибрати з MikroTik» читає наявні списки з маршрутизаторів.'],
+                ['key' => 'MT_LIST', 'label' => 'Типовий address-list', 'type' => 'mtlist', 'hidden' => true],
                 ['key' => 'MT_TIMEOUT', 'label' => 'Тривалість доступу (ГГ:ХХ:СС)', 'type' => 'text', 'help' => 'Після цього часу MikroTik сам видаляє IP зі списку.'],
                 ['key' => 'PRIVATE_CLIENT_NETWORKS', 'label' => 'Дозволені приватні мережі клієнтів', 'type' => 'text', 'help' => 'Через кому, наприклад 172.20.2.0/23. Звичайно портал приймає лише публічні IP; з цих мереж вхід теж дозволено (тестування з офісу, клієнти за внутрішнім каналом). Порожньо — лише публічні IP.'],
-                ['key' => 'MT_USER', 'label' => 'API: типовий користувач', 'type' => 'text', 'group' => 'API (REST / API-SSL) — типові облікові дані', 'help' => 'Для маршрутизаторів з протоколом API без власного користувача. Окремий користувач з групою vpn-portal (read, write, api, rest-api). Порожньо — якщо всі API-маршрутизатори мають власних користувачів.'],
-                ['key' => 'MT_PASS', 'label' => 'API: типовий пароль', 'type' => 'secret', 'help' => 'Для маршрутизаторів з протоколом API без власного пароля.'],
-                ['key' => 'MT_CA_FILE', 'label' => 'API: сертифікат CA (файл PEM)', 'type' => 'text', 'help' => 'Наприклад, /etc/ssl/company-ca.pem. Для лише SSH-маршрутизаторів не потрібен.'],
-                ['key' => 'MT_SSH_USER', 'label' => 'SSH: типовий користувач', 'type' => 'text', 'group' => 'SSH — типові облікові дані', 'help' => 'Для SSH-маршрутизаторів без власного користувача. Користувач з групою vpn-portal (policy: ssh, read, write) — див. deploy/mikrotik/routeros-ssh.rsc. Без суфікса +cet: портал додає його сам.'],
-                ['key' => 'MT_SSH_PASS', 'label' => 'SSH: типовий пароль', 'type' => 'secret', 'help' => 'Для SSH-маршрутизаторів без власного пароля. Можна залишити порожнім, якщо вхід за ключем.'],
-                ['key' => 'MT_SSH_KEY', 'label' => 'SSH: приватний ключ', 'type' => 'secretarea', 'help' => 'Спільний для всіх SSH-маршрутизаторів; портал спершу пробує ключ, потім пароль. Вставте вміст файла ключа (OpenSSH / PEM: ed25519 або RSA). Відкритий ключ імпортуйте на маршрутизатор: /user ssh-keys import.'],
-                ['key' => 'MT_SSH_KEY_PASS', 'label' => 'SSH: пароль ключа', 'type' => 'secret', 'help' => 'Лише якщо ключ захищено паролем.'],
+                ['key' => 'MT_CA_FILE', 'label' => 'Сертифікат CA для протоколу API (файл PEM)', 'type' => 'text', 'hidden' => true],
+                // MT_LIST, MT_CA_FILE and the common credentials of each protocol: not shown on the page any more (each router has
+                // its own on its edit page), but still read from .env or from an earlier panel save, and
+                // used for a router without its own user / password. 'hidden' fields are never changed
+                // by a save that does not send them.
+                ['key' => 'MT_USER', 'label' => 'API: типовий користувач', 'type' => 'text', 'hidden' => true],
+                ['key' => 'MT_PASS', 'label' => 'API: типовий пароль', 'type' => 'secret', 'hidden' => true],
+                ['key' => 'MT_SSH_USER', 'label' => 'SSH: типовий користувач', 'type' => 'text', 'hidden' => true],
+                ['key' => 'MT_SSH_PASS', 'label' => 'SSH: типовий пароль', 'type' => 'secret', 'hidden' => true],
+                ['key' => 'MT_SSH_KEY', 'label' => 'SSH: приватний ключ', 'type' => 'secretarea', 'hidden' => true],
+                ['key' => 'MT_SSH_KEY_PASS', 'label' => 'SSH: пароль ключа', 'type' => 'secret', 'hidden' => true],
             ],
         ],
         'mail' => [
@@ -151,7 +155,7 @@ final class SettingsSchema
             in_array($event, ['login_ok', 'login_fail', 'login_blocked', 'mfa_ok', 'mfa_fail', 'mfa_not_enrolled',
                 'lockout', 'unlock', 'email_otp_sent', 'email_otp_limited'], true) => 'auth',
             in_array($event, ['mt_add', 'mt_update', 'mt_revoke', 'revoke_self'], true) => 'access',
-            in_array($event, ['enroll_ok', 'enroll_fail', 'totp_reset'], true) => 'enroll',
+            in_array($event, ['enroll_ok', 'enroll_fail', 'enroll_email', 'totp_reset'], true) => 'enroll',
             in_array($event, ['mail_sent', 'mail_skipped'], true) => 'mail',
             default => 'system',
         };

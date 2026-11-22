@@ -1,6 +1,6 @@
 # VPN-GW: посібник розробника
 
-**Версія документа 5.0 · 21.11.2026 · відповідає коду VPN-GW 0.7** · Супровідні документи: `INSTALL_GUIDE.md` (встановлення), `ADMIN_GUIDE.md` (панель адміністратора), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд), `CHANGELOG.md`
+**Версія документа 5.0 · 21.11.2026 · відповідає коду VPN-GW 0.10** · Супровідні документи: `INSTALL_GUIDE.md` (встановлення), `ADMIN_GUIDE.md` (панель адміністратора), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд), `CHANGELOG.md`
 
 Документ описує архітектуру і внутрішню будову реалізованого порталу: де що лежить, як працює кожен модуль, які рішення безпеки закладено і як вносити зміни. Код — у репозиторії; тут лише ключові фрагменти.
 
@@ -31,7 +31,7 @@ IP додається у `/ip firewall address-list` (список `MT_LIST`, ti
 | RouterOS 7 | `ext-curl` (REST) |
 | Пошта | `phpmailer/phpmailer` ^6.9 |
 | Конфігурація / журнал | `vlucas/phpdotenv` ^5.6, `monolog/monolog` ^3 |
-| Frontend | HTML-шаблони PHP + власний CSS (`public/assets/app.css`), **без JS і без збірки** |
+| Frontend | HTML-шаблони PHP + Bootstrap 5.3.3 (локальна копія `public/assets/bootstrap.min.css`, MIT) і `public/assets/app.css`; оформлення як у ITSM System; **без JS і без збірки** |
 | Сховище | SQLite (WAL) |
 | Розробка | `phpunit/phpunit` ^11, `phpstan/phpstan` ^2 (рівень 8) |
 
@@ -44,7 +44,8 @@ VERSION                    номер версії (єдине джерело); 
 install.sh                 встановлення на Debian з перевіркою залежностей (INSTALL_GUIDE)
 public/
   index.php                front controller: Config::load -> сесія -> App
-  assets/app.css           стилі
+  assets/bootstrap.min.css Bootstrap 5.3.3 (без змін, лише без рядка sourceMappingURL)
+  assets/app.css           власні стилі поверх Bootstrap
 src/
   Config.php               .env + значення з панелі, валідація (fail closed), ConfigException.php
   Container.php            сервіси (lazy, перевизначення в тестах)
@@ -63,7 +64,7 @@ src/
   Admin/                   AdminAuth (облікові записи), Jobs (черга агента), LogReader, Diagnostics
   Settings/                SettingsSchema (що редагується в панелі), SettingsStore (БД, шифрування)
   Agent/                   Agent (root), BackupArchive, ReleaseInspector, Proc
-  Storage/                 Database, migrations/001_init.sql, 002_admin.sql
+  Storage/                 Database, migrations/001_init.sql, 002_admin.sql, 003_user_email.sql
   Log/AuditLogger.php      JSON-журнал (файл, syslog, віддалений syslog), категорії подій
   Mail/Notifier.php        листи через SMTP STARTTLS
   Support/SystemClock.php  PSR-20 годинник
@@ -110,6 +111,7 @@ Webroot — лише `public/`. `src/`, `.env`, `vendor/`, `/var/lib/vpn-gw` з�
 | `EMAIL_OTP_ENABLED` | `false` за замовчуванням |
 | `SMTP_HOST` | порожній = листи вимкнено (подія `mail_skipped`) |
 | `IT_CONTACT` | текст із пробілами — **у подвійних лапках** |
+| `USER_GUIDE_PDF` | шлях до PDF-пам'ятки, що надсилається після реєстрації автентифікатора; порожньо — `doc/VPN-GW_Інструкція_підключення.pdf` з архіву |
 | `DB_PATH`, `LOCK_DIR` | шляхи в `/var/lib/vpn-gw` |
 | `LOG_PATH` | абсолютний шлях; панель додатково дозволяє лише `DATA_DIR/logs/*.log` і `/var/log/vpn-gw/*.log` |
 | `LOG_LEVEL` / `LOG_EVENTS` | `info` або `warning` / підмножина `auth, access, enroll, mail, admin, system` |
@@ -140,7 +142,11 @@ Webroot — лише `public/`. `src/`, `.env`, `vendor/`, `/var/lib/vpn-gw` з�
 | GET/POST | `/enroll` | Enroll::handle | реєстрація TOTP (`action=login` / `action=confirm`) |
 | GET/POST | `/admin/login`, POST `/admin/logout` | Admin\Auth | вхід адміністратора |
 | GET | `/admin` | Admin\Dashboard | огляд |
-| GET/POST | `/admin/settings/{mikrotik,mail,ad,logs,backup}` | Admin\Settings | `action=save` / `test` / `reset:KEY` |
+| GET/POST | `/admin/routers/add`, `/admin/routers/edit/{назва}` | Admin\Settings::router | сторінка маршрутизатора (`router[...]`, `action=save` / `lists`): `ROUTERS`, `ROUTER_PASSWORDS`, `MT_SSH_HOSTKEYS` перебудовуються зі збережених маршрутизаторів з цим заміненим / доданим тими самими перевірками (`readRouters` тощо) |
+| GET | `/admin/authenticators` (`q`) | Admin\Authenticators | зареєстровані автентифікатори (`Database::listTotp`, без секретів) |
+| POST | `/admin/authenticators/delete` | Admin\Authenticators | видалення прив'язки (`Database::deleteTotp`), подія `admin_totp_reset` |
+| POST | `/admin/grants/revoke` | Admin\Dashboard | «Відключити»: `AccessGranter::revoke` для активного доступу з таблиці `grants`, подія `admin_revoke` |
+| GET/POST | `/admin/settings/{mikrotik,mail,ad,logs,backup}` | Admin\Settings | `action=save` / `test` / `reset:KEY`; для mikrotik ще `lists` і `delete_router` (+ `router=<назва>`; окрема форма `#router-delete`, кнопки таблиці прив'язані атрибутом `form`) |
 | GET | `/admin/logs` | Admin\Logs | перегляд журналу (`q`, `level`, `category`) |
 | GET/POST | `/admin/backups`, GET `/admin/backups/{файл}` | Admin\Maintenance | список, «створити зараз», завантаження |
 | GET/POST | `/admin/update`, GET `/admin/jobs/{id}` | Admin\Maintenance | завантаження релізу, стан завдання |
@@ -247,7 +253,9 @@ interface RouterOsClient {
 - Коментар у MikroTik: `User: <лише [A-Za-z0-9._-]> via VPN-2FA`. IP перед записом перевіряється ще раз (публічна IPv4).
 
 ### 5.7. Шаблони і стилі
-`View::render` дає шаблонам `$e` (екранування `htmlspecialchars`), `$csrf`, `$base`. Весь вивід — через `$e()`. CSP: `default-src 'self'; script-src 'none'; img-src 'self' data:` (QR — SVG data-URI). На сторінках **не виводиться** версія ПЗ.
+`View::render` дає шаблонам `$e` (екранування `htmlspecialchars`), `$csrf`, `$base`. Весь вивід — через `$e()`. CSP: `default-src 'self'; script-src 'none'; img-src 'self' data:` (QR — SVG data-URI; Bootstrap також малює стрілки списків і перемикачі як SVG data-URI). На публічних сторінках **не виводиться** версія ПЗ (у панелі — у підвалі).
+
+Оформлення взято з ITSM System (`ROOT-BSD/itsm-system`): Bootstrap 5, `body.bg-light`, темне меню `navbar-dark bg-dark`, `container py-4`, картки `card` з `card-header`, таблиці `table table-sm` / `table-bordered`, `alert-*`, `badge bg-*`, кнопки `btn-primary` / `btn-outline-*`. Відмінності від ITSM: Bootstrap не з CDN, а локальний файл (CSP `style-src 'self'`, сервер без доступу до CDN), без `bootstrap.bundle.js` (CSP `script-src 'none'`), тому меню панелі завжди розгорнуте (`navbar-expand`) і переноситься на вузьких екранах. Публічні сторінки — `layout.php` (вузька колонка по центру, як вхід ITSM), панель — `admin_layout.php` (меню розділів і вкладки підрозділів). Дати в шаблонах — через `$dt(...)` (`View::formatDate`: `d.m.Y H:i:s` у часовому поясі сервера; приймає ATOM, `Y-m-d H:i:s` і Unix-час). Класи з `app.css`: `form-card-sm/md/xs` (ширина форм), `label-col`, `table-compact-rows`, `router-card` (картка маршрутизатора, лише перегляд), `form-card-lg` (сторінка маршрутизатора), `connected-routers` (таблиця підключених), `code` (поле коду), `result-icon`.
 
 ### 5.8. Журнал аудиту
 JSON-рядок на подію → файл `LOG_PATH` (0600) + syslog `LOG_LOCAL5`. Поля: `event, app_version, user, ip, remote_addr, xff_raw, ua` + додаткові. Ключі, що містять `pass|code|secret|otp|token|csrf|session`, відкидаються автоматично; рядки від клієнта очищуються від керувальних символів і обрізаються.
@@ -314,6 +322,7 @@ JSON-рядок на подію → файл `LOG_PATH` (0600) + syslog `LOG_LOC
 Міграції — `src/Storage/migrations/NNN_*.sql`, виконуються всі по порядку, кожна ідемпотентна.
 - `001_init.sql`: `totp_secrets(username, secret_enc, last_step, created_at, created_by)`, `rate_events(key, ts)`, `lockouts(key, until_ts, reason)`, `grants(id, username, ip, granted_at, expires_at, revoked_at)`.
 - `002_admin.sql`: `settings(key, value, encrypted, updated_at, updated_by)`, `admins(username, password_hash, created_at, updated_at, last_login_at, last_login_ip)`.
+- `003_user_email.sql`: `user_emails(username, email, created_at, updated_at)` — адреса, вказана під час першої реєстрації автентифікатора (`EnrollController::confirm`: перевіряється до коду, зберігається після успішної реєстрації, подія `enroll_email`); туди `Notifier::userGuide()` надсилає PDF `Config::userGuidePdf()` (`USER_GUIDE_PDF` або `doc/VPN-GW_Інструкція_підключення.pdf`). Адреса показується на сторінці «Автентифікатори» і підставляється при повторній реєстрації; сповіщення про доступ і код на e-mail, як і раніше, йдуть на адресу з AD (`mail`).
 
 Очищення — `bin/cleanup.php` щогодини (systemd timer).
 

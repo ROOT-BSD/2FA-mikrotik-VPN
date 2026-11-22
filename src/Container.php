@@ -16,6 +16,7 @@ use VpnGw\Auth\EmailOtp;
 use VpnGw\Auth\LdapAuthenticator;
 use VpnGw\Auth\TotpService;
 use VpnGw\Http\Admin\AuthController as AdminAuthController;
+use VpnGw\Http\Admin\AuthenticatorsController;
 use VpnGw\Http\Admin\DashboardController;
 use VpnGw\Http\Admin\LogsController;
 use VpnGw\Http\Admin\MaintenanceController;
@@ -158,6 +159,7 @@ final class Container
         return $this->get(__FUNCTION__, fn () => new EnrollController(
             $this->cfg, $this->session, $this->view(), $this->clock(),
             $this->authenticator(), $this->totp(), $this->rateLimiter(), $this->audit(),
+            $this->db(), $this->notifier(),
         ), EnrollController::class);
     }
 
@@ -203,7 +205,15 @@ final class Container
     {
         return $this->get(__FUNCTION__, fn () => new DashboardController(
             $this->cfg, $this->session, $this->view(), $this->clock(), $this->audit(), $this->db(), $this->jobs(),
+            fn (): AccessGranter => $this->granter(),
         ), DashboardController::class);
+    }
+
+    public function authenticatorsController(): AuthenticatorsController
+    {
+        return $this->get(__FUNCTION__, fn () => new AuthenticatorsController(
+            $this->cfg, $this->session, $this->view(), $this->clock(), $this->audit(), $this->db(),
+        ), AuthenticatorsController::class);
     }
 
     public function settingsController(): SettingsController

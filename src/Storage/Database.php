@@ -108,10 +108,64 @@ final class Database
         return $st->rowCount() > 0;
     }
 
+    /**
+     * Registered authenticators (admin panel), without the secrets.
+     *
+     * @return list<array{username: string, created_at: string, created_by: string, last_step: int}>
+     */
+    public function listTotp(string $search = ''): array
+    {
+        $sql = 'SELECT username, created_at, created_by, last_step FROM totp_secrets';
+        $args = [];
+        if ($search !== '') {
+            $sql .= " WHERE username LIKE ? ESCAPE '\\'";
+            $args[] = '%' . addcslashes($search, '%_\\') . '%';
+        }
+        $st = $this->pdo->prepare($sql . ' ORDER BY username');
+        $st->execute($args);
+        $out = [];
+        foreach ($st->fetchAll() as $r) {
+            $out[] = [
+                'username' => (string) $r['username'], 'created_at' => (string) $r['created_at'],
+                'created_by' => (string) $r['created_by'], 'last_step' => (int) $r['last_step'],
+            ];
+        }
+        return $out;
+    }
+
     public function countTotp(): int
     {
         $st = $this->pdo->query('SELECT COUNT(*) FROM totp_secrets');
         return $st === false ? 0 : (int) $st->fetchColumn();
+    }
+
+    // ---- User e-mail addresses (given at enrolment) ---------------------------
+
+    public function setUserEmail(string $username, string $email, string $now): void
+    {
+        $this->pdo->prepare(
+            'INSERT INTO user_emails (username, email, created_at, updated_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT(username) DO UPDATE SET email = excluded.email, updated_at = excluded.updated_at'
+        )->execute([$username, $email, $now, $now]);
+    }
+
+    public function userEmail(string $username): ?string
+    {
+        $st = $this->pdo->prepare('SELECT email FROM user_emails WHERE username = ?');
+        $st->execute([$username]);
+        $v = $st->fetchColumn();
+        return is_string($v) ? $v : null;
+    }
+
+    /** @return array<string, string> username => e-mail */
+    public function userEmails(): array
+    {
+        $st = $this->pdo->query('SELECT username, email FROM user_emails');
+        $out = [];
+        foreach ($st === false ? [] : $st->fetchAll() as $r) {
+            $out[(string) $r['username']] = (string) $r['email'];
+        }
+        return $out;
     }
 
     // ---- Rate limiting -----------------------------------------------------
@@ -193,6 +247,20 @@ final class Database
             ];
         }
         return $out;
+    }
+
+    public function hasActiveGrant(string $username, string $ip, string $now): bool
+    {
+        $st = $this->pdo->prepare('SELECT 1 FROM grants WHERE username = ? AND ip = ? AND revoked_at IS NULL AND expires_at > ? LIMIT 1');
+        $st->execute([$username, $ip, $now]);
+        return $st->fetchColumn() !== false;
+    }
+
+    public function hasActiveGrantFor(string $username, string $now): bool
+    {
+        $st = $this->pdo->prepare('SELECT 1 FROM grants WHERE username = ? AND revoked_at IS NULL AND expires_at > ? LIMIT 1');
+        $st->execute([$username, $now]);
+        return $st->fetchColumn() !== false;
     }
 
     public function countActiveGrants(string $now): int

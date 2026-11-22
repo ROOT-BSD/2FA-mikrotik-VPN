@@ -259,6 +259,7 @@ if [[ $CHECK_ONLY -eq 0 ]]; then
   chmod 750 "$TARGET/install.sh"
   if [[ -f "$TARGET/.env" ]]; then chown "$APP_USER:$APP_USER" "$TARGET/.env"; fi
   ok "Права на код: root:$APP_USER, для $APP_USER лише читання"
+  if [[ -f "$TARGET/doc/VPN-GW_Інструкція_підключення.pdf" ]]; then ok "Пам'ятка для користувачів (PDF) на місці"; else warn "Немає $TARGET/doc/VPN-GW_Інструкція_підключення.pdf — після реєстрації автентифікатора пам'ятку не буде надіслано"; fi
 else
   [[ -f "$TARGET/vendor/autoload.php" ]] && ok "vendor/ на місці" || warn "Залежності ще не встановлено ($TARGET/vendor)"
 fi
@@ -479,7 +480,9 @@ if systemctl is-active -q apache2 2>/dev/null && [[ -n "$DOMAIN" ]]; then
   code() { curl -sk -o /dev/null -w '%{http_code}' --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN$1" || echo 000; }
   [[ "$(code /)" == 404 ]] && ok "/ -> 404 (маскування)" || bad "/ має повертати 404"
   [[ "$(code /index.php)" == 404 ]] && ok "/index.php -> 404" || bad "/index.php має повертати 404"
-  [[ "$(code "$BASE_PATH/assets/app.css")" == 200 ]] && ok "$BASE_PATH/assets/app.css -> 200" || bad "Стилі порталу недоступні (права на $TARGET/public)"
+  for css in bootstrap.min.css app.css; do
+    [[ "$(code "$BASE_PATH/assets/$css")" == 200 ]] && ok "$BASE_PATH/assets/$css -> 200" || bad "Стилі порталу недоступні: $css (права на $TARGET/public)"
+  done
   c="$(code "$BASE_PATH/")"
   if [[ "$c" == 200 ]]; then ok "$BASE_PATH/ -> 200"; elif [[ $NEED_EDIT -eq 1 ]]; then warn "$BASE_PATH/ -> $c (очікувано, доки не заповнено .env)"; else bad "$BASE_PATH/ -> $c (див. /var/log/apache2/vpn-gw-error.log, $DATA_DIR/logs/php-error.log)"; fi
   hdr="$(curl -skI --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/" 2>/dev/null)"

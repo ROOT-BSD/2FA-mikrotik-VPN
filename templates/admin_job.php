@@ -1,40 +1,45 @@
 <?php
 /**
  * @var callable(mixed): string $e
+ * @var callable(mixed, bool=): string $dt
  * @var string $base
  * @var array<string, string> $job
  * @var string $log
  * @var bool $refresh
  */
 $states = ['queued' => 'у черзі — очікує агента', 'running' => 'виконується', 'ok' => 'успішно', 'failed' => 'помилка'];
-$back = $job['type'] === 'update' ? ['/admin/update', 'До оновлень'] : ['/admin/backups', 'До резервних копій'];
+$back = $job['type'] === 'update' ? ['/admin/update', 'Оновлення'] : ['/admin/backups', 'Резервні копії'];
 ?>
-<h1><?= $job['type'] === 'update' ? 'Оновлення' . (isset($job['version']) ? ' до ' . $e($job['version']) : '') : 'Резервне копіювання' ?></h1>
-<div class="alert alert-<?= $e(['ok' => 'success', 'failed' => 'error'][$job['state']] ?? 'info') ?>">
+<div class="mb-3"><a href="<?= $e($base . $back[0]) ?>" class="text-decoration-none">&larr; <?= $e($back[1]) ?></a></div>
+<h3 class="mb-3"><?= $job['type'] === 'update' ? 'Оновлення' . (isset($job['version']) ? ' до ' . $e($job['version']) : '') : 'Резервне копіювання' ?></h3>
+<div class="alert alert-<?= $e(['ok' => 'success', 'failed' => 'danger'][$job['state']] ?? 'info') ?>">
     <strong><?= $e($states[$job['state']] ?? $job['state']) ?></strong><?= isset($job['message']) ? ' — ' . $e($job['message']) : '' ?>
 </div>
-<dl class="facts">
-    <dt>Завдання</dt><dd><code><?= $e($job['id']) ?></code></dd>
-    <dt>Ініціатор</dt><dd><?= $e($job['by']) ?></dd>
-    <dt>Створено</dt><dd><?= $e($job['created']) ?></dd>
+<div class="card mb-4 form-card-md">
+    <div class="card-body">
+        <table class="table table-sm mb-0">
+            <tr><th class="label-col">Завдання</th><td><code><?= $e($job['id']) ?></code></td></tr>
+            <tr><th>Ініціатор</th><td><?= $e($job['by']) ?></td></tr>
+            <tr><th>Створено</th><td><?= $e($dt($job['created'])) ?></td></tr>
 <?php if (isset($job['started'])): ?>
-    <dt>Почато</dt><dd><?= $e($job['started']) ?></dd>
+            <tr><th>Почато</th><td><?= $e($dt($job['started'])) ?></td></tr>
 <?php endif ?>
 <?php if (isset($job['finished'])): ?>
-    <dt>Завершено</dt><dd><?= $e($job['finished']) ?></dd>
+            <tr><th>Завершено</th><td><?= $e($dt($job['finished'])) ?></td></tr>
 <?php endif ?>
 <?php if (isset($job['file']) && $job['type'] === 'backup'): ?>
-    <dt>Файл</dt><dd><a href="<?= $e($base) ?>/admin/backups/<?= $e($job['file']) ?>"><?= $e($job['file']) ?></a></dd>
+            <tr><th>Файл</th><td><a href="<?= $e($base) ?>/admin/backups/<?= $e($job['file']) ?>"><?= $e($job['file']) ?></a></td></tr>
 <?php endif ?>
-</dl>
+        </table>
+    </div>
+</div>
 <?php if ($refresh): ?>
-    <p class="muted small">Сторінка оновлюється автоматично кожні 5 секунд.</p>
+    <p class="text-muted small">Сторінка оновлюється автоматично кожні 5 секунд.</p>
 <?php endif ?>
 <?php if ($job['state'] === 'queued'): ?>
-    <p class="help">Якщо завдання довго в черзі, перевірте на сервері: <code>systemctl status vpn-gw-agent.path vpn-gw-agent.service</code></p>
+    <p class="form-text">Якщо завдання довго в черзі, перевірте на сервері: <code>systemctl status vpn-gw-agent.path vpn-gw-agent.service</code></p>
 <?php endif ?>
 <?php if ($log !== ''): ?>
-<h2>Журнал виконання</h2>
-<pre class="code log-output"><?= $e($log) ?></pre>
+<h5>Журнал виконання</h5>
+<pre class="bg-dark text-light rounded p-3 small log-output"><?= $e($log) ?></pre>
 <?php endif ?>
-<p><a href="<?= $e($base . $back[0]) ?>"><?= $e($back[1]) ?></a></p>

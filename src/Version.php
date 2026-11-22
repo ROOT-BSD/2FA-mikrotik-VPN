@@ -13,5 +13,5 @@ namespace VpnGw;
  */
 final class Version
 {
-    public const CURRENT = '0.7';
+    public const CURRENT = '0.10';
 }

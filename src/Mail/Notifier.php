@@ -14,10 +14,31 @@ use VpnGw\Log\AuditLogger;
  */
 final class Notifier
 {
+    /**
+     * @param \Closure(PHPMailer): void|null $transport replaces the SMTP send (tests); null = SMTP
+     */
     public function __construct(
         private readonly Config $cfg,
         private readonly AuditLogger $audit,
+        private readonly ?\Closure $transport = null,
     ) {
+    }
+
+    /**
+     * After the first enrolment: the «how to connect» guide (part C of the user guide, PDF)
+     * to the address the user gave. Returns true when the server accepted the message.
+     */
+    public function userGuide(string $to, string $username, string $pdfPath, string $portalUrl): bool
+    {
+        $body = "Вітаємо!\n\nMicrosoft Authenticator прив’язано до облікового запису {$username}. "
+            . "У вкладенні — пам’ятка, як підключатися до робочого VPN щоразу, коли він потрібен.\n\n"
+            . ($portalUrl !== '' ? "Адреса порталу VPN-GW: {$portalUrl}\nЗбережіть її в закладках і не пересилайте стороннім.\n\n" : '')
+            . "Питання — до ІТ-служби: {$this->cfg->get('IT_CONTACT')}.\n\nЛист надіслано автоматично порталом VPN-GW.";
+        if (!is_file($pdfPath) || !is_readable($pdfPath)) {
+            $this->audit->event('mail_error', $username, null, ['subject' => 'guide', 'error' => 'guide PDF not found']);
+            return false;
+        }
+        return $this->send($to, 'VPN-GW: як підключатися до робочого VPN', $body, $username, [$pdfPath => basename($pdfPath)]);
     }
 
     public function enabled(): bool
@@ -54,13 +75,14 @@ final class Notifier
         return $error;
     }
 
-    private function send(?string $to, string $subject, string $body, string $username): bool
+    /** @param array<string, string> $attachments path => file name shown to the recipient */
+    private function send(?string $to, string $subject, string $body, string $username, array $attachments = []): bool
     {
         if (!$this->enabled() || $to === null || filter_var($to, FILTER_VALIDATE_EMAIL) === false) {
             $this->audit->event('mail_skipped', $username, null, ['subject' => $subject]);
             return false;
         }
-        $error = $this->deliver($to, $subject, $body);
+        $error = $this->deliver($to, $subject, $body, $attachments);
         if ($error === null) {
             $this->audit->event('mail_sent', $username, null, ['subject' => $subject]);
             return true;
@@ -69,8 +91,11 @@ final class Notifier
         return false;
     }
 
-    /** @return string|null error message, null when the message was accepted by the server */
-    private function deliver(string $to, string $subject, string $body): ?string
+    /**
+     * @param array<string, string> $attachments path => file name
+     * @return string|null error message, null when the message was accepted by the server
+     */
+    private function deliver(string $to, string $subject, string $body, array $attachments = []): ?string
     {
         $mail = new PHPMailer(true);
         try {
@@ -96,6 +121,13 @@ final class Notifier
             $mail->Subject = $subject;
             $mail->Body = $body;
             $mail->isHTML(false);
+            foreach ($attachments as $path => $name) {
+                $mail->addAttachment($path, $name, PHPMailer::ENCODING_BASE64, 'application/pdf');
+            }
+            if ($this->transport !== null) {
+                ($this->transport)($mail);
+                return null;
+            }
             $mail->send();
             return null;
         } catch (MailException $e) {
