@@ -1,6 +1,6 @@
 # VPN-GW: покрокова інструкція — від чистого сервера до робочого порталу
 
-**Версія 4.0 · 21.11.2026 · для VPN-GW 0.10** · Веб-сервер: **Apache 2.4 (mpm_event) + PHP-FPM 8.4** · Супровідні документи: `QUICKSTART.md` (короткий порядок команд), `ADMIN_GUIDE.md` (панель адміністратора), `DEVELOPMENT.md` (будова коду), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд)
+**Версія 4.0 · 21.11.2026 · для VPN-GW 0.10.3** · Веб-сервер: **Apache 2.4 (mpm_event) + PHP-FPM 8.4** · Супровідні документи: `QUICKSTART.md` (короткий порядок команд), `ADMIN_GUIDE.md` (панель адміністратора), `DEVELOPMENT.md` (будова коду), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд)
 
 Інструкція веде від порожньої віртуальної машини до запущеного порталу: встановлення Debian, захист сервера, розгортання коду скриптом `install.sh`, налаштування в панелі адміністратора, сертифікати, MikroTik, перевірки, резервне копіювання, пілот і безпечне введення в експлуатацію. Кожен етап закінчується пунктом **«Перевірка»** — не переходьте далі, доки вона не пройдена.
 
@@ -8,7 +8,7 @@
 
 | Значення в інструкції | Що це |
 |---|---|
-| `10.0.10.20` | Внутрішня IP сервера VPN-GW (DMZ) |
+| `10.0.10.30` | Внутрішня IP сервера VPN-GW (DMZ) |
 | `203.0.113.10` | Публічна IP, на яку опублікований портал |
 | `vpn-gw.company.ua` | DNS-ім'я порталу |
 | `/k7f3x` | Неочевидний шлях порталу (`install.sh` генерує випадковий) |
@@ -33,7 +33,7 @@
 - [ ] **Група AD** `VPN-Users` (і для пілоту — `VPN-Users-Pilot`), тестовий користувач.
 - [ ] **Доступ адміністратора** до MikroTik (Winbox / SSH) і до міжмережевого екрана DMZ.
 - [ ] **Тестовий стенд RouterOS**: MikroTik CHR 7.x і 6.x у віртуалках — для розробки без ризику для бойових маршрутизаторів.
-- [ ] **Архів з кодом** `vpn-gw-0.10.zip` і файл контрольної суми `vpn-gw-0.10.zip.sha256`.
+- [ ] **Архів з кодом** `vpn-gw-0.10.3.zip` і файл контрольної суми `vpn-gw-0.10.3.zip.sha256`.
 - [ ] **ПК адміністратора у внутрішній мережі** (підмережа входить в `INTERNAL_NETWORKS`): з нього відкривається панель адміністратора.
 - [ ] **Сейф паролів** для `APP_KEY`, пароля адміністратора панелі і пароля резервних копій.
 - [ ] Узгоджено зі службою безпеки: правила мережевого доступу (етап 2.6), строки зберігання журналів.
@@ -44,7 +44,7 @@
 
 1. Завантажити ВМ з ISO → **Install** (текстовий інсталятор).
 2. Мова: English (системні повідомлення англійською простіше гуглити), розташування: Ukraine, локаль: `en_US.UTF-8`, клавіатура: American English.
-3. Мережа: якщо немає DHCP — вказати вручну IP `10.0.10.20/24`, шлюз, DNS-сервери (контролери домену).
+3. Мережа: якщо немає DHCP — вказати вручну IP `10.0.10.30/24`, шлюз, DNS-сервери (контролери домену).
 4. Hostname: `vpn-gw`, domain: `company.local`.
 5. **Пароль root — залишити порожнім.** Тоді інсталятор вимкне вхід root і додасть першого користувача в `sudo`.
 6. Користувач: наприклад `sysadm`, складний пароль.
@@ -59,7 +59,7 @@
 
 **Перевірка:**
 ```bash
-ssh sysadm@10.0.10.20
+ssh sysadm@10.0.10.30
 cat /etc/os-release | grep VERSION=      # VERSION="13 (trixie)"
 sudo -v && echo sudo-ok
 ```
@@ -83,8 +83,8 @@ sudo apt install -y vim curl unzip ca-certificates gnupg \
 ```
 auto ens18
 iface ens18 inet static
-    address 10.0.10.20/24
-    gateway 10.0.10.254
+    address 10.0.10.30/24
+    gateway 10.0.10.354
     dns-nameservers 10.0.10.11 10.0.10.12
     dns-search company.local
 ```
@@ -116,7 +116,7 @@ sudo dpkg-reconfigure -plow unattended-upgrades     # Yes
 
 ### 2.5. SSH: лише ключі, лише з адмін-підмережі
 
-На своєму ПК: `ssh-keygen -t ed25519` → `ssh-copy-id sysadm@10.0.10.20`.
+На своєму ПК: `ssh-keygen -t ed25519` → `ssh-copy-id sysadm@10.0.10.30`.
 
 `/etc/ssh/sshd_config.d/10-hardening.conf`:
 ```
@@ -141,16 +141,24 @@ sudo sshd -t && sudo systemctl reload ssh
 
 Вхідні: 443/80 — звідусіль, 22 — лише з адмін-підмережі. Вихідні: лише потрібні напрямки.
 
-`/etc/nftables.conf`:
+`/etc/nftables.conf` (той самий файл — `deploy/nftables/nftables.conf`):
 ```
 #!/usr/sbin/nft -f
+# /etc/nftables.conf for the VPN-GW server. Replace addresses with your own.
+#
+# What is dropped is logged: journalctl -k | grep -E 'nft-(in|out)-drop'
+# DNS must go to the servers in /etc/resolv.conf (or `resolvectl status` with systemd-resolved),
+# otherwise apt, composer and certbot cannot resolve names.
 flush ruleset
 
 define ADMIN_NET = 10.0.5.0/24
-define DCS       = { 10.0.10.11, 10.0.10.12 }
+define DCS       = { 10.0.10.11, 10.0.10.12 }      # domain controllers (LDAP / LDAPS)
+define DNS       = { 10.0.10.11, 10.0.10.12 }      # resolvers from /etc/resolv.conf
 define ROUTERS   = { 10.0.10.1, 10.0.20.1 }
 define SMTP      = 10.0.10.40
 define SIEM      = 10.0.10.50
+# HTTP proxy for apt / composer, if the server reaches the Internet only through it:
+# define PROXY = 10.0.10.60   and uncomment the PROXY rule in chain output
 
 table inet filter {
   set web_rl {
@@ -162,6 +170,9 @@ table inet filter {
     ct state invalid drop
     iif lo accept
     ip protocol icmp icmp type { echo-request, destination-unreachable, time-exceeded } limit rate 10/second accept
+    # IPv6 cannot work without neighbour discovery
+    meta l4proto ipv6-icmp icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert, echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem } accept
+    # at most 60 new web connections per minute per source IP
     tcp dport { 80, 443 } ct state new add @web_rl { ip saddr limit rate over 60/minute burst 30 packets } drop
     tcp dport { 80, 443 } accept
     ip saddr $ADMIN_NET tcp dport 22 accept
@@ -172,12 +183,19 @@ table inet filter {
     type filter hook output priority 0; policy drop;
     ct state established,related accept
     oif lo accept
-    ip daddr $DCS udp dport { 53, 123 } accept          # DNS, NTP
-    ip daddr $DCS tcp dport { 53, 389, 636 } accept     # DNS, LDAP/StartTLS, LDAPS
-    ip daddr $ROUTERS tcp dport { 22, 8443, 8729 } accept   # SSH, REST (v7), API-SSL (v6)
+    ip protocol icmp icmp type { echo-request, destination-unreachable, time-exceeded } accept   # ping, traceroute replies
+    meta l4proto ipv6-icmp accept                                                         # IPv6 neighbour discovery, ping
+    ip daddr $DNS udp dport 53 accept                    # DNS
+    ip daddr $DNS tcp dport 53 accept
+    udp dport 123 accept                                 # NTP: systemd-timesyncd / chrony to any server
+    udp dport 33434-33534 accept                         # traceroute (UDP); answers come back as ICMP
+    ip daddr $DCS tcp dport { 389, 636 } accept          # LDAP/StartTLS, LDAPS
+    ip daddr $ROUTERS tcp dport { 22, 443, 8443, 8729 } accept   # SSH, REST (v7), API-SSL (v6)
     ip daddr $SMTP tcp dport 587 accept
     ip daddr $SIEM tcp dport 6514 accept
-    tcp dport { 80, 443 } accept    # apt, composer, Let's Encrypt — див. примітку
+    ip daddr $SIEM udp dport 514 accept                  # SIEM over UDP (LOG_REMOTE)
+    # ip daddr $PROXY tcp dport { 3128, 8080 } accept    # apt / composer through a proxy
+    tcp dport { 80, 443 } accept                         # apt, composer, Let's Encrypt (or only to your proxy)
     log prefix "nft-out-drop " limit rate 5/minute
   }
 }
@@ -187,7 +205,11 @@ sudo nft -c -f /etc/nftables.conf && sudo systemctl enable --now nftables
 ```
 > Правило з `@web_rl` обмежує кількість **нових з'єднань** з однієї IP (60/хв). В Apache немає вбудованого аналога `limit_req`, тому грубе обмеження робимо на рівні firewall, а точне (спроби входу і кодів) — у самому застосунку (`RateLimiter`).
 
-> Правило `tcp dport {80,443}` у вихідних потрібне для `apt`, `composer` і Let's Encrypt. Якщо в організації є проксі/дзеркало репозиторіїв — замініть його на дозвіл лише до проксі.
+> Правило `tcp dport {80,443}` у вихідних потрібне для `apt`, `composer` і Let's Encrypt. Якщо в організації є проксі/дзеркало репозиторіїв — замініть його на дозвіл лише до проксі (`define PROXY` і правило з ним).
+
+> **DNS і NTP.** У `DNS` вкажіть **ті самі** сервери, що в `/etc/resolv.conf` (з systemd-resolved — `resolvectl status`). Якщо там інші адреси, ніж дозволені, `apt update` і `composer` не знайдуть жодного сервера (помилки «Temporary failure resolving …»), хоча порти 80/443 відкриті. NTP (UDP 123) дозволено до будь-якого сервера — systemd-timesyncd і chrony працюють з пулами за замовчуванням.
+
+> **ping і traceroute назовні:** ping — правило `icmp type echo-request`, traceroute — UDP 33434–33534 (типовий режим `traceroute`; `traceroute -I` і `mtr` працюють через ICMP, `traceroute -T` — через TCP 80/443); відповіді проходять як пов'язані з'єднання. ICMPv6 потрібен для роботи IPv6 (виявлення сусідів). Що саме блокується, видно в журналі ядра: `journalctl -k | grep -E 'nft-(in|out)-drop'`.
 
 ### 2.7. Довіра до корпоративного CA
 
@@ -216,7 +238,7 @@ logger -p local5.info "vpn-gw test event"      # має з'явитися в SIE
 **Перевірка етапу 2:**
 ```bash
 sudo nft list ruleset | head
-ssh -o PasswordAuthentication=yes sysadm@10.0.10.20     # має бути відмова
+ssh -o PasswordAuthentication=yes sysadm@10.0.10.30     # має бути відмова
 chronyc tracking | grep "System time"
 ```
 
@@ -226,15 +248,15 @@ chronyc tracking | grep "System time"
 
 Скопіюйте на сервер архів і файл контрольної суми, наприклад у `/tmp`:
 - з Windows — WinSCP (протокол SFTP) або `scp` у PowerShell;
-- з Linux / macOS: `scp vpn-gw-0.10.zip vpn-gw-0.10.zip.sha256 admin@10.0.10.20:/tmp/`
+- з Linux / macOS: `scp vpn-gw-0.10.3.zip vpn-gw-0.10.3.zip.sha256 admin@10.0.10.30:/tmp/`
 
 На сервері перевірте цілісність і розпакуйте:
 ```bash
-cd /tmp && sha256sum -c vpn-gw-0.10.zip.sha256          # має бути: vpn-gw-0.10.zip: OK
-cd /root && sudo unzip -q /tmp/vpn-gw-0.10.zip && cd vpn-gw-0.10
+cd /tmp && sha256sum -c vpn-gw-0.10.3.zip.sha256          # має бути: vpn-gw-0.10.3.zip: OK
+cd /root && sudo unzip -q /tmp/vpn-gw-0.10.3.zip && cd vpn-gw-0.10.3
 ```
 
-**Перевірка:** `sha256sum` → `OK`; `cat VERSION` → `0.10`; у каталозі є `install.sh`, `composer.json`, `src/`, `deploy/`. Подальші команди `./install.sh` — з цього каталогу.
+**Перевірка:** `sha256sum` → `OK`; `cat VERSION` → `0.10.3`; у каталозі є `install.sh`, `composer.json`, `src/`, `deploy/`. Подальші команди `./install.sh` — з цього каталогу.
 
 ---
 

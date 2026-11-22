@@ -593,6 +593,31 @@ final class AdminPanelTest extends TestCase
         self::assertStringContainsString('пароль шифрування', self::body($this->request('GET', '/admin/backups')));
     }
 
+    public function testJobLogLinesColouredByMarker(): void
+    {
+        $id = '20261122-101500-0badc0de';
+        file_put_contents($this->tmp . "/agent/status/$id.json", json_encode([
+            'id' => $id, 'type' => 'update', 'state' => 'failed', 'by' => 'admin', 'version' => '0.10.3',
+            'created' => '2026-11-22 10:15:00', 'finished' => '2026-11-22 10:15:30', 'message' => 'install.sh завершився з помилкою',
+        ]));
+        file_put_contents($this->tmp . "/agent/status/$id.log", implode("\n", [
+            '==> Перевірка архіву',
+            "\e[32m[ OK ]\e[0m sha256 збігається",
+            '[WARN] Немає <USER_GUIDE_PDF>',
+            '[FAIL] nginx & apache одночасно',
+            '[FATAL] Зупинено',
+        ]) . "\n");
+        $this->login();
+        $html = self::body($this->request('GET', "/admin/jobs/$id"));
+        self::assertStringContainsString('<span class="log-ok">[ OK ] sha256 збігається</span>', $html);
+        self::assertStringContainsString('<span class="log-warn">[WARN] Немає &lt;USER_GUIDE_PDF&gt;</span>', $html);
+        self::assertStringContainsString('<span class="log-fail">[FAIL] nginx &amp; apache одночасно</span>', $html);
+        self::assertStringContainsString('<span class="log-fail">[FATAL] Зупинено</span>', $html);
+        self::assertStringContainsString("log-output\">==&gt; Перевірка архіву\n", $html, 'unmarked lines stay plain');
+        self::assertStringNotContainsString("\e[", $html);
+        self::assertStringContainsString('log-legend', $html);
+    }
+
     public function testFinishedJobAndDownload(): void
     {
         $name = 'vpn-gw-20261115-020000-auto.vgbk';

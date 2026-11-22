@@ -40,6 +40,20 @@ $back = $job['type'] === 'update' ? ['/admin/update', 'Оновлення'] : ['
     <p class="form-text">Якщо завдання довго в черзі, перевірте на сервері: <code>systemctl status vpn-gw-agent.path vpn-gw-agent.service</code></p>
 <?php endif ?>
 <?php if ($log !== ''): ?>
-<h5>Журнал виконання</h5>
-<pre class="bg-dark text-light rounded p-3 small log-output"><?= $e($log) ?></pre>
+<div class="d-flex flex-wrap align-items-baseline gap-3 mb-2">
+    <h5 class="mb-0">Журнал виконання</h5>
+    <span class="small log-legend"><span class="log-ok">[ OK ]</span> успішно · <span class="log-warn">[WARN]</span> попередження · <span class="log-fail">[FAIL]</span> помилка</span>
+</div>
+<pre class="bg-dark text-light rounded p-3 small log-output"><?php
+// install.sh writes "[ OK ]", "[WARN]", "[FAIL]" / "[FATAL]" at the start of a line (no colour codes when
+// not on a terminal); each line is escaped and only gets a class by its marker.
+foreach (preg_split('/\r?\n/', (string) rtrim((string) preg_replace('/\e\[[0-9;]*m/', '', $log))) ?: [] as $line):
+    $cls = match (true) {
+        preg_match('/\[\s*OK\s*\]/', $line) === 1 => 'log-ok',
+        str_contains($line, '[WARN]') => 'log-warn',
+        str_contains($line, '[FAIL]'), str_contains($line, '[FATAL]') => 'log-fail',
+        default => '',
+    };
+    echo $cls === '' ? $e($line) : '<span class="' . $cls . '">' . $e($line) . '</span>', "\n";
+endforeach ?></pre>
 <?php endif ?>

@@ -1,7 +1,7 @@
 {
     "name": "company/vpn-gw",
     "description": "VPN-GW: two-factor Dynamic Knocking portal for MikroTik L2TP/IPsec VPN",
-    "version": "0.10",
+    "version": "0.10.3",
     "type": "project",
     "license": "proprietary",
     "require": {

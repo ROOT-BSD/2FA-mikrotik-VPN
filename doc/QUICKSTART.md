@@ -1,6 +1,6 @@
 # VPN-GW: встановлення на новий сервер — швидкий гайд
 
-**VPN-GW 0.10 · 22.11.2026** · Послідовність команд від щойно встановленого Debian 13 без додаткового ПЗ до робочого порталу. Подробиці кожного кроку — `INSTALL_GUIDE.md`, робота в панелі адміністратора — `ADMIN_GUIDE.md`.
+**VPN-GW 0.10.3 · 22.11.2026** · Послідовність команд від щойно встановленого Debian 13 без додаткового ПЗ до робочого порталу. Подробиці кожного кроку — `INSTALL_GUIDE.md`, робота в панелі адміністратора — `ADMIN_GUIDE.md`.
 
 Час: близько 30–40 хвилин (без підготовки MikroTik і сертифікатів).
 
@@ -11,13 +11,13 @@
 | Що | Приклад |
 |---|---|
 | Сервер: Debian 13 «trixie», мінімальне встановлення (лише *SSH server* + *standard system utilities*), 2 vCPU, 2 ГБ RAM, 20 ГБ | ВМ у DMZ |
-| Статична IP і доступ в Інтернет (apt, packagist.org) | `10.0.10.20` |
+| Статична IP і доступ в Інтернет (apt, packagist.org) | `10.0.10.30` |
 | DNS A-запис порталу (**без AAAA**) і публікація порту 443 (і 80 для Let's Encrypt) | `vpn-gw.company.ua` |
 | Сертифікат корпоративного CA (PEM) | `company-ca.pem` |
 | Дані AD: домен і назва групи VPN | `nerc.gov.ua`, `VPN-Users` |
 | MikroTik: адреси, доступ адміністратора | `10.0.10.1` (v7), `10.0.20.1` (v6) |
 | ПК адміністратора у внутрішній мережі (для панелі адміністратора) | `10.0.50.0/24` |
-| Архів з кодом і файл контрольної суми | `vpn-gw-0.10.zip`, `vpn-gw-0.10.zip.sha256` |
+| Архів з кодом і файл контрольної суми | `vpn-gw-0.10.3.zip`, `vpn-gw-0.10.3.zip.sha256` |
 
 > Усі команди нижче виконуються від **root**. Якщо в системі є `sudo` — `sudo -i`; якщо під час встановлення Debian задано пароль root — `su -`.
 
@@ -46,7 +46,7 @@ sleep 10; chronyc tracking | grep -E "Leap|System time"
 
 ## 2. Сертифікат корпоративного CA
 
-Скопіюйте `company-ca.pem` на сервер (наприклад, `scp company-ca.pem admin@10.0.10.20:/tmp/`), потім:
+Скопіюйте `company-ca.pem` на сервер (наприклад, `scp company-ca.pem admin@10.0.10.30:/tmp/`), потім:
 ```bash
 install -m 644 /tmp/company-ca.pem /etc/ssl/company-ca.pem
 cp /etc/ssl/company-ca.pem /usr/local/share/ca-certificates/company-ca.crt
@@ -62,14 +62,14 @@ update-ca-certificates
 
 Скопіюйте на сервер архів і файл контрольної суми, наприклад у `/tmp`:
 - з Windows — WinSCP (протокол SFTP) або `scp` у PowerShell;
-- з Linux / macOS: `scp vpn-gw-0.10.zip vpn-gw-0.10.zip.sha256 admin@10.0.10.20:/tmp/`
+- з Linux / macOS: `scp vpn-gw-0.10.3.zip vpn-gw-0.10.3.zip.sha256 admin@10.0.10.30:/tmp/`
 
 На сервері перевірте цілісність і розпакуйте:
 ```bash
-cd /tmp && sha256sum -c vpn-gw-0.10.zip.sha256          # має бути: vpn-gw-0.10.zip: OK
-cd /root && unzip -q /tmp/vpn-gw-0.10.zip && cd vpn-gw-0.10
+cd /tmp && sha256sum -c vpn-gw-0.10.3.zip.sha256          # має бути: vpn-gw-0.10.3.zip: OK
+cd /root && unzip -q /tmp/vpn-gw-0.10.3.zip && cd vpn-gw-0.10.3
 ```
-**Очікувано:** `sha256sum` → `OK`; `cat VERSION` → `0.10`; у каталозі є `install.sh`.
+**Очікувано:** `sha256sum` → `OK`; `cat VERSION` → `0.10.3`; у каталозі є `install.sh`.
 
 > Усі наступні команди `./install.sh …` виконуйте з каталогу `/root/vpn-gw-0.8`.
 
@@ -151,7 +151,7 @@ sudo -u vpngw nano /srv/vpn-gw/.env        # INTERNAL_NETWORKS=10.0.0.0/8,192.16
 adduser admin && usermod -aG sudo admin
 ```
 
-**SSH лише за ключами.** Зі свого ПК: `ssh-copy-id admin@10.0.10.20`, перевірте вхід за ключем, потім на сервері:
+**SSH лише за ключами.** Зі свого ПК: `ssh-copy-id admin@10.0.10.30`, перевірте вхід за ключем, потім на сервері:
 ```bash
 cat > /etc/ssh/sshd_config.d/10-hardening.conf <<'EOF'
 PermitRootLogin no
@@ -161,7 +161,7 @@ EOF
 sshd -t && systemctl reload ssh
 ```
 
-**Firewall сервера.** Відредагуйте адреси в `deploy/nftables/nftables.conf` у каталозі з кодом, а не в `/srv/vpn-gw`: той перезаписується при кожному запуску. Потрібні адреси: адмін-підмережа, DC, MikroTik, SMTP, SIEM. Потім:
+**Firewall сервера.** Відредагуйте адреси в `deploy/nftables/nftables.conf` у каталозі з кодом, а не в `/srv/vpn-gw`: той перезаписується при кожному запуску. Потрібні адреси: адмін-підмережа, DC, **DNS-сервери з `/etc/resolv.conf`**, MikroTik, SMTP, SIEM. Потім:
 ```bash
 nano deploy/nftables/nftables.conf
 ./install.sh --domain vpn-gw.company.ua --yes --with-nftables
@@ -181,7 +181,7 @@ apt install -y unattended-upgrades && dpkg-reconfigure -plow unattended-upgrades
 
 **Протокол API (REST / API-SSL):**
 1. Імпортуйте сертифікат з IP маршрутизатора в SAN і назвіть його `router-api`.
-2. Відкрийте `deploy/mikrotik/routeros7.rsc` або `routeros6.rsc`, замініть `10.0.10.20` на IP сервера і пароль, вставте команди в термінал.
+2. Відкрийте `deploy/mikrotik/routeros7.rsc` або `routeros6.rsc`, замініть `10.0.10.30` на IP сервера і пароль, вставте команди в термінал.
 3. Пароль `vpn_portal` введіть у панелі: **MikroTik → API: пароль → Зберегти**.
 
 **Протокол SSH:**

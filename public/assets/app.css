@@ -39,7 +39,13 @@ details > summary { cursor: pointer; }
 .checklist { columns: 2; max-width: 600px; }
 @media (max-width: 575.98px) { .checklist { columns: 1; } }
 
-/* Журнал виконання завдання */
+/* Журнал виконання завдання: OK — зелене, WARN — жовте, FAIL — червоне (на темному тлі) */
+.log-output .log-ok { color: #75d68f; }
+.log-output .log-warn { color: #ffd54f; }
+.log-output .log-fail { color: #ff6b6b; font-weight: 600; }
+.log-legend .log-ok { color: var(--bs-success); font-family: var(--bs-font-monospace); }
+.log-legend .log-warn { color: #b58105; font-family: var(--bs-font-monospace); }
+.log-legend .log-fail { color: var(--bs-danger); font-family: var(--bs-font-monospace); }
 .log-output { max-height: 60vh; overflow: auto; white-space: pre-wrap; }
 .form-card-lg { max-width: 900px; }
 .router-facts { font-size: .9rem; }
