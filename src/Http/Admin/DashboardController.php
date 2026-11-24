@@ -48,7 +48,7 @@ final class DashboardController extends AdminController
             } elseif (!$this->cfg->ldapVerifiesCertificate()) {
                 $warnings[] = 'AD: сертифікат контролера домену не перевіряється — немає захисту від підміни сервера.';
             }
-            $unconfirmed = array_filter($this->cfg->routers(), fn ($r) => $r['transport'] === 'ssh' && !isset($this->cfg->sshHostKeys()[$r['name']]));
+            $unconfirmed = array_filter($this->cfg->activeRouters(), fn ($r) => $r['transport'] === 'ssh' && !isset($this->cfg->sshHostKeys()[$r['name']]));
             if ($unconfirmed !== []) {
                 $warnings[] = 'SSH-ключ не підтверджено для: ' . implode(', ', array_column($unconfirmed, 'name')) . ' — MikroTik → «Перевірити MikroTik».';
             }
@@ -64,6 +64,7 @@ final class DashboardController extends AdminController
                 'enrolled' => $this->db->countTotp(),
                 'active' => $this->db->countActiveGrants($now),
                 'grants' => $this->db->recentGrants(10),
+                'lockouts' => $this->db->activeLockouts($this->clock->now()->getTimestamp()),
                 'now' => $now,
                 'routers' => $this->cfg->routers(),
                 'ldapHosts' => $this->cfg->list('LDAP_HOSTS'),
@@ -108,5 +109,44 @@ final class DashboardController extends AdminController
             }
             return $this->redirect($response, '/admin');
         });
+    }
+
+    /**
+     * «Розблокувати»: lifts one active lockout and its attempt counter, like bin/unlock.php.
+     * For a login the e-mail code counter is cleared too. Only a lockout that is still in
+     * force can be lifted; the key is taken from the list, never built from free input.
+     */
+    public function unlock(Request $request, Response $response): Response
+    {
+        return $this->guarded($request, $response, function (string $admin) use ($request, $response): Response {
+            $body = $request->getParsedBody();
+            $key = is_array($body) && is_string($body['key'] ?? null) ? $body['key'] : '';
+            $active = array_column($this->db->activeLockouts($this->clock->now()->getTimestamp()), 'key');
+            if (!in_array($key, $active, true)) {
+                $this->flash('Це блокування вже не діє.', 'warning');
+                return $this->redirect($response, '/admin');
+            }
+            [$type, $value] = explode(':', $key, 2) + [1 => ''];
+            $this->db->deleteLockout($key);
+            $this->db->clearRateEvents($key);
+            if ($type === 'user') {
+                $this->db->clearRateEvents("mail:$value");
+            }
+            $this->audit->event('unlock', $admin, $this->remote($request), ['key' => $key, 'by' => $admin, 'source' => 'panel']);
+            $this->flash(self::lockoutLabel($type) . " {$value} розблоковано.");
+            return $this->redirect($response, '/admin');
+        });
+    }
+
+    /** Human name of a lockout key type (ip, user, admin-ip, admin-user). */
+    public static function lockoutLabel(string $type): string
+    {
+        return match ($type) {
+            'ip' => 'IP-адресу',
+            'user' => 'Логін',
+            'admin-ip' => 'IP-адресу (вхід до панелі)',
+            'admin-user' => 'Адміністратора',
+            default => $type,
+        };
     }
 }

@@ -32,13 +32,23 @@ final class Notifier
     {
         $body = "Вітаємо!\n\nMicrosoft Authenticator прив’язано до облікового запису {$username}. "
             . "У вкладенні — пам’ятка, як підключатися до робочого VPN щоразу, коли він потрібен.\n\n"
-            . ($portalUrl !== '' ? "Адреса порталу VPN-GW: {$portalUrl}\nЗбережіть її в закладках і не пересилайте стороннім.\n\n" : '')
+            . $this->addresses($portalUrl)
             . "Питання — до ІТ-служби: {$this->cfg->get('IT_CONTACT')}.\n\nЛист надіслано автоматично порталом VPN-GW.";
         if (!is_file($pdfPath) || !is_readable($pdfPath)) {
             $this->audit->event('mail_error', $username, null, ['subject' => 'guide', 'error' => 'guide PDF not found']);
             return false;
         }
         return $this->send($to, 'VPN-GW: як підключатися до робочого VPN', $body, $username, [$pdfPath => basename($pdfPath)]);
+    }
+
+    /**
+     * Portal address for the letter body: the external one (PORTAL_EXTERNAL_URL) if set,
+     * otherwise the one the user came from (enrolment); none — ''.
+     */
+    private function addresses(string $portalUrl): string
+    {
+        $url = $this->cfg->externalPortalUrl() !== '' ? $this->cfg->externalPortalUrl() : $portalUrl;
+        return $url === '' ? '' : "Адреса порталу VPN-GW: {$url}\nЗбережіть адресу в закладках і не пересилайте стороннім.\n\n";
     }
 
     public function enabled(): bool
@@ -49,6 +59,7 @@ final class Notifier
     public function accessGranted(?string $to, string $username, string $ip, \DateTimeImmutable $until): void
     {
         $body = "Для облікового запису {$username} відкрито VPN-доступ з IP {$ip} до {$until->format('H:i d.m.Y')}.\n\n"
+            . $this->addresses('')
             . "Якщо це були не ви — негайно повідомте: {$this->cfg->get('IT_CONTACT')}.\n\n"
             . "Лист надіслано автоматично порталом VPN-GW.";
         $this->send($to, 'VPN-доступ відкрито', $body, $username);

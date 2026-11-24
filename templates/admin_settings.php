@@ -77,14 +77,18 @@ $srcLabel = ['panel' => 'змінено в панелі', 'env' => 'з .env', 'd
     $defList = $values['MT_LIST'] ?? '';
 ?>
         <div class="row g-3 router-cards">
-<?php foreach ($savedRouters as $r): $rn = $r['name']; $tr = $r['transport'] === 'ssh' ? 'ssh' : 'api'; ?>
+<?php $activeCount = count(array_filter($savedRouters, static fn ($x) => !$x['disabled'])); ?>
+<?php foreach ($savedRouters as $r): $rn = $r['name']; $tr = $r['transport'] === 'ssh' ? 'ssh' : 'api'; $off = $r['disabled']; ?>
             <div class="col-md-6 col-xl-4">
-                <div class="card h-100 router-card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="card h-100 router-card <?= $off ? 'router-off' : 'router-on' ?>">
+                    <div class="card-header d-flex justify-content-between align-items-center gap-2">
                         <span class="fw-semibold"><?= $e($rn) ?></span>
-<?php if ($tr === 'ssh'): ?>
+                        <span>
+<?php if ($tr === 'ssh' && !$off): ?>
                         <?= isset($hostKeys[$rn]) ? '<span class="badge bg-success">ключ підтверджено</span>' : '<span class="badge bg-warning text-dark">ключ не підтверджено</span>' ?>
 <?php endif ?>
+                        <?= $off ? '<span class="badge bg-secondary router-state">відключено</span>' : '<span class="badge bg-success-subtle text-success-emphasis border border-success-subtle router-state">активний</span>' ?>
+                        </span>
                     </div>
                     <div class="card-body">
                         <dl class="row g-2 mb-0 router-facts">
@@ -95,8 +99,14 @@ $srcLabel = ['panel' => 'змінено в панелі', 'env' => 'з .env', 'd
                             <dt class="col-5">Address-list</dt><dd class="col-7 address-list"><strong><?= $e($r['list'] !== '' ? $r['list'] : $defList) ?></strong><?= $r['list'] === '' ? ' <span class="text-muted small fw-normal">(типовий)</span>' : '' ?></dd>
                         </dl>
                     </div>
-                    <div class="card-footer bg-transparent">
+                    <div class="card-footer bg-transparent d-flex flex-wrap gap-2">
                         <a href="<?= $e($base) ?>/admin/routers/edit/<?= $e($rn) ?>" class="btn btn-outline-primary btn-sm">Редагувати</a>
+<?php if ($off): ?>
+                        <button type="submit" form="router-toggle" name="router" value="<?= $e($rn) ?>" class="btn btn-outline-success btn-sm">Включити</button>
+<?php else: ?>
+                        <button type="submit" form="router-toggle" name="router" value="<?= $e($rn) ?>" class="btn btn-outline-secondary btn-sm"<?= $activeCount < 2 ? ' disabled title="Єдиний увімкнений маршрутизатор відключити не можна"' : '' ?>>Відключити</button>
+<?php endif ?>
+                        <button type="submit" form="router-delete" name="router" value="<?= $e($rn) ?>" class="btn btn-outline-danger btn-sm ms-auto"<?= count($savedRouters) < 2 || (!$off && $activeCount < 2) ? ' disabled title="Єдиний увімкнений маршрутизатор видалити не можна"' : '' ?>>Видалити</button>
                     </div>
                 </div>
             </div>
@@ -112,10 +122,10 @@ $srcLabel = ['panel' => 'змінено в панелі', 'env' => 'з .env', 'd
             <div class="card-header">Підключені маршрутизатори</div>
             <div class="table-responsive">
                 <table class="table table-sm align-middle mb-0 connected-routers">
-                    <thead class="table-light"><tr><th>Назва</th><th>Адреса</th><th>RouterOS</th><th>Протокол</th><th>Користувач</th><th>Address-list</th><th>Ключ SSH</th><th></th></tr></thead>
+                    <thead class="table-light"><tr><th>Назва</th><th>Адреса</th><th>RouterOS</th><th>Протокол</th><th>Користувач</th><th>Address-list</th><th>Ключ SSH</th><th>Стан</th><th></th></tr></thead>
                     <tbody>
 <?php foreach ($savedRouters as $r): $rn = $r['name']; $tr = $r['transport'] === 'ssh' ? 'ssh' : 'api'; ?>
-                        <tr>
+                        <tr<?= $r['disabled'] ? ' class="table-secondary text-muted"' : '' ?>>
                             <td class="fw-semibold"><?= $e($rn) ?></td>
                             <td><code><?= $e($r['host']) ?>:<?= $e($r['port']) ?></code></td>
                             <td><?= $e($r['version']) ?></td>
@@ -123,13 +133,14 @@ $srcLabel = ['panel' => 'змінено в панелі', 'env' => 'з .env', 'd
                             <td><?= $r['user'] !== '' ? $e($r['user']) : '<span class="text-muted">типовий</span>' ?><?= in_array($rn, $ownPasswords, true) ? ' <span class="badge bg-light text-dark border">свій пароль</span>' : '' ?></td>
                             <td><?= $r['list'] !== '' ? $e($r['list']) : '<span class="text-muted">' . $e($defList) . '</span>' ?></td>
                             <td><?= $tr !== 'ssh' ? '<span class="text-muted">—</span>' : (isset($hostKeys[$rn]) ? '<span class="badge bg-success">підтверджено</span>' : '<span class="badge bg-warning text-dark">не підтверджено</span>') ?></td>
-                            <td class="text-end"><button type="submit" form="router-delete" name="router" value="<?= $e($rn) ?>" class="btn btn-outline-danger btn-sm py-0"<?= count($savedRouters) < 2 ? ' disabled title="Єдиний маршрутизатор видалити не можна"' : '' ?>>Видалити</button></td>
+                            <td><?= $r['disabled'] ? 'відключено' : 'активний' ?></td>
+                            <td class="text-end"><button type="submit" form="router-delete" name="router" value="<?= $e($rn) ?>" class="btn btn-outline-danger btn-sm py-0"<?= count($savedRouters) < 2 || (!$r['disabled'] && $activeCount < 2) ? ' disabled title="Єдиний увімкнений маршрутизатор видалити не можна"' : '' ?>>Видалити</button></td>
                         </tr>
 <?php endforeach ?>
                     </tbody>
                 </table>
             </div>
-            <div class="card-footer small text-muted">«Видалити» одразу прибирає маршрутизатор з налаштувань разом з його власним паролем і ключем SSH; інші незбережені зміни на сторінці не застосовуються. Адреси, які портал уже додав на цьому MikroTik, той видалить сам після тайм-ауту.</div>
+            <div class="card-footer small text-muted">«Відключити» на картці тимчасово виключає маршрутизатор з роботи (портал не додає на ньому адрес, не розриває сесій і не перевіряє його), зберігаючи всі його налаштування; «Включити» повертає. «Видалити» одразу прибирає маршрутизатор з налаштувань разом з його власним паролем і ключем SSH; інші незбережені зміни на сторінці не застосовуються. Адреси, які портал уже додав на цьому MikroTik, той видалить сам після тайм-ауту.</div>
         </div>
 <?php elseif ($f['type'] === 'mtlist' && $mtLists === null): ?>
         <div class="input-group form-card-md">
@@ -203,13 +214,17 @@ $srcLabel = ['panel' => 'змінено в панелі', 'env' => 'з .env', 'd
     <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
     <input type="hidden" name="action" value="delete_router">
 </form>
+<form method="post" action="<?= $e($action) ?>" id="router-toggle" class="d-none">
+    <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
+    <input type="hidden" name="action" value="toggle_router">
+</form>
 <?php endif ?>
 
 <?php if ($section === 'mikrotik'): ?>
 <div class="card mb-4">
     <div class="card-header">Перевірка з’єднання</div>
     <div class="card-body">
-        <p class="small text-muted">Підключається до кожного маршрутизатора зі збереженими налаштуваннями і читає його address-list. Нічого не змінює.</p>
+        <p class="small text-muted">Підключається до кожного активного (не відключеного) маршрутизатора зі збереженими налаштуваннями і читає його address-list. Нічого не змінює.</p>
         <form method="post" action="<?= $e($action) ?>">
             <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
             <button type="submit" name="action" value="test" class="btn btn-outline-primary btn-sm">Перевірити MikroTik</button>

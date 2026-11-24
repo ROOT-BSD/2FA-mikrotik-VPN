@@ -1,6 +1,6 @@
 # VPN-GW: покрокова інструкція — від чистого сервера до робочого порталу
 
-**Версія 4.0 · 21.11.2026 · для VPN-GW 0.10.3** · Веб-сервер: **Apache 2.4 (mpm_event) + PHP-FPM 8.4** · Супровідні документи: `QUICKSTART.md` (короткий порядок команд), `ADMIN_GUIDE.md` (панель адміністратора), `DEVELOPMENT.md` (будова коду), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд)
+**Версія 4.0 · 21.11.2026 · для VPN-GW 0.10.9** · Веб-сервер: **Apache 2.4 (mpm_event) + PHP-FPM 8.4** · Супровідні документи: `QUICKSTART.md` (короткий порядок команд), `ADMIN_GUIDE.md` (панель адміністратора), `DEVELOPMENT.md` (будова коду), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд)
 
 Інструкція веде від порожньої віртуальної машини до запущеного порталу: встановлення Debian, захист сервера, розгортання коду скриптом `install.sh`, налаштування в панелі адміністратора, сертифікати, MikroTik, перевірки, резервне копіювання, пілот і безпечне введення в експлуатацію. Кожен етап закінчується пунктом **«Перевірка»** — не переходьте далі, доки вона не пройдена.
 
@@ -8,7 +8,7 @@
 
 | Значення в інструкції | Що це |
 |---|---|
-| `10.0.10.30` | Внутрішня IP сервера VPN-GW (DMZ) |
+| `10.0.10.90` | Внутрішня IP сервера VPN-GW (DMZ) |
 | `203.0.113.10` | Публічна IP, на яку опублікований портал |
 | `vpn-gw.company.ua` | DNS-ім'я порталу |
 | `/k7f3x` | Неочевидний шлях порталу (`install.sh` генерує випадковий) |
@@ -16,8 +16,8 @@
 | `10.0.0.0/8` | Внутрішня мережа (реєстрація TOTP і панель адміністратора) |
 | `dc01`, `dc02.company.local` | Контролери домену |
 | `10.0.10.1` (v7), `10.0.20.1` (v6) | MikroTik |
-| `10.0.10.40` | SMTP |
-| `10.0.10.50` | syslog / SIEM |
+| `10.0.10.90` | SMTP |
+| `10.0.10.90` | syslog / SIEM |
 | `ivanenko` | Тестовий доменний користувач |
 | `198.51.100.99` | Тестова публічна IP для перевірок `mt-check` |
 
@@ -33,7 +33,7 @@
 - [ ] **Група AD** `VPN-Users` (і для пілоту — `VPN-Users-Pilot`), тестовий користувач.
 - [ ] **Доступ адміністратора** до MikroTik (Winbox / SSH) і до міжмережевого екрана DMZ.
 - [ ] **Тестовий стенд RouterOS**: MikroTik CHR 7.x і 6.x у віртуалках — для розробки без ризику для бойових маршрутизаторів.
-- [ ] **Архів з кодом** `vpn-gw-0.10.3.zip` і файл контрольної суми `vpn-gw-0.10.3.zip.sha256`.
+- [ ] **Архів з кодом** `vpn-gw-0.10.9.zip` і файл контрольної суми `vpn-gw-0.10.9.zip.sha256`.
 - [ ] **ПК адміністратора у внутрішній мережі** (підмережа входить в `INTERNAL_NETWORKS`): з нього відкривається панель адміністратора.
 - [ ] **Сейф паролів** для `APP_KEY`, пароля адміністратора панелі і пароля резервних копій.
 - [ ] Узгоджено зі службою безпеки: правила мережевого доступу (етап 2.6), строки зберігання журналів.
@@ -44,7 +44,7 @@
 
 1. Завантажити ВМ з ISO → **Install** (текстовий інсталятор).
 2. Мова: English (системні повідомлення англійською простіше гуглити), розташування: Ukraine, локаль: `en_US.UTF-8`, клавіатура: American English.
-3. Мережа: якщо немає DHCP — вказати вручну IP `10.0.10.30/24`, шлюз, DNS-сервери (контролери домену).
+3. Мережа: якщо немає DHCP — вказати вручну IP `10.0.10.90/24`, шлюз, DNS-сервери (контролери домену).
 4. Hostname: `vpn-gw`, domain: `company.local`.
 5. **Пароль root — залишити порожнім.** Тоді інсталятор вимкне вхід root і додасть першого користувача в `sudo`.
 6. Користувач: наприклад `sysadm`, складний пароль.
@@ -59,7 +59,7 @@
 
 **Перевірка:**
 ```bash
-ssh sysadm@10.0.10.30
+ssh sysadm@10.0.10.90
 cat /etc/os-release | grep VERSION=      # VERSION="13 (trixie)"
 sudo -v && echo sudo-ok
 ```
@@ -83,8 +83,8 @@ sudo apt install -y vim curl unzip ca-certificates gnupg \
 ```
 auto ens18
 iface ens18 inet static
-    address 10.0.10.30/24
-    gateway 10.0.10.354
+    address 10.0.10.90/24
+    gateway 10.0.10.954
     dns-nameservers 10.0.10.11 10.0.10.12
     dns-search company.local
 ```
@@ -116,7 +116,7 @@ sudo dpkg-reconfigure -plow unattended-upgrades     # Yes
 
 ### 2.5. SSH: лише ключі, лише з адмін-підмережі
 
-На своєму ПК: `ssh-keygen -t ed25519` → `ssh-copy-id sysadm@10.0.10.30`.
+На своєму ПК: `ssh-keygen -t ed25519` → `ssh-copy-id sysadm@10.0.10.90`.
 
 `/etc/ssh/sshd_config.d/10-hardening.conf`:
 ```
@@ -155,10 +155,10 @@ define ADMIN_NET = 10.0.5.0/24
 define DCS       = { 10.0.10.11, 10.0.10.12 }      # domain controllers (LDAP / LDAPS)
 define DNS       = { 10.0.10.11, 10.0.10.12 }      # resolvers from /etc/resolv.conf
 define ROUTERS   = { 10.0.10.1, 10.0.20.1 }
-define SMTP      = 10.0.10.40
-define SIEM      = 10.0.10.50
+define SMTP      = 10.0.10.90
+define SIEM      = 10.0.10.90
 # HTTP proxy for apt / composer, if the server reaches the Internet only through it:
-# define PROXY = 10.0.10.60   and uncomment the PROXY rule in chain output
+# define PROXY = 10.0.10.90   and uncomment the PROXY rule in chain output
 
 table inet filter {
   set web_rl {
@@ -224,12 +224,12 @@ echo "TLS_CACERT /etc/ssl/company-ca.pem" | sudo tee -a /etc/ldap/ldap.conf
 
 `/etc/rsyslog.d/60-siem.conf`:
 ```
-auth,authpriv.*  @@(o)10.0.10.50:6514
-local5.*         @@(o)10.0.10.50:6514
+auth,authpriv.*  @@(o)10.0.10.90:6514
+local5.*         @@(o)10.0.10.90:6514
 ```
 (`local5` — типова facility журналу VPN-GW; змінюється в панелі: **Журнали → Facility syslog**.) Для TLS-пересилання встановити `rsyslog-gnutls` і налаштувати `$DefaultNetstreamDriver gtls` за інструкцією SIEM.
 
-Альтернатива без rsyslog: панель → **Журнали → Віддалений syslog / SIEM** (`10.0.10.50:514`, UDP, RFC 5424). Недоступність SIEM не впливає на роботу порталу.
+Альтернатива без rsyslog: панель → **Журнали → Віддалений syslog / SIEM** (`10.0.10.90:514`, UDP, RFC 5424). Недоступність SIEM не впливає на роботу порталу.
 ```bash
 sudo systemctl restart rsyslog
 logger -p local5.info "vpn-gw test event"      # має з'явитися в SIEM
@@ -238,7 +238,7 @@ logger -p local5.info "vpn-gw test event"      # має з'явитися в SIE
 **Перевірка етапу 2:**
 ```bash
 sudo nft list ruleset | head
-ssh -o PasswordAuthentication=yes sysadm@10.0.10.30     # має бути відмова
+ssh -o PasswordAuthentication=yes sysadm@10.0.10.90     # має бути відмова
 chronyc tracking | grep "System time"
 ```
 
@@ -248,15 +248,15 @@ chronyc tracking | grep "System time"
 
 Скопіюйте на сервер архів і файл контрольної суми, наприклад у `/tmp`:
 - з Windows — WinSCP (протокол SFTP) або `scp` у PowerShell;
-- з Linux / macOS: `scp vpn-gw-0.10.3.zip vpn-gw-0.10.3.zip.sha256 admin@10.0.10.30:/tmp/`
+- з Linux / macOS: `scp vpn-gw-0.10.9.zip vpn-gw-0.10.9.zip.sha256 admin@10.0.10.90:/tmp/`
 
 На сервері перевірте цілісність і розпакуйте:
 ```bash
-cd /tmp && sha256sum -c vpn-gw-0.10.3.zip.sha256          # має бути: vpn-gw-0.10.3.zip: OK
-cd /root && sudo unzip -q /tmp/vpn-gw-0.10.3.zip && cd vpn-gw-0.10.3
+cd /tmp && sha256sum -c vpn-gw-0.10.9.zip.sha256          # має бути: vpn-gw-0.10.9.zip: OK
+cd /root && sudo unzip -q /tmp/vpn-gw-0.10.9.zip && cd vpn-gw-0.10.9
 ```
 
-**Перевірка:** `sha256sum` → `OK`; `cat VERSION` → `0.10.3`; у каталозі є `install.sh`, `composer.json`, `src/`, `deploy/`. Подальші команди `./install.sh` — з цього каталогу.
+**Перевірка:** `sha256sum` → `OK`; `cat VERSION` → `0.10.9`; у каталозі є `install.sh`, `composer.json`, `src/`, `deploy/`. Подальші команди `./install.sh` — з цього каталогу.
 
 ---
 
@@ -436,7 +436,7 @@ sudo -u vpngw php /srv/vpn-gw/bin/mt-check.php revoke 198.51.100.99
 | 3 | `/enroll` ззовні | з мобільного інтернету відкрити `/<шлях>/enroll` | 404 |
 | 4 | Повний вхід | з мобільного інтернету: логін → код | «Доступ дозволено», IP у списку на всіх маршрутизаторах, лист на пошту |
 | 5 | Повтор коду | ввести той самий код ще раз у новій сесії | «Невірний код» |
-| 6 | Блокування | 3 невірні коди | «Забагато спроб»; `bin/unlock.php` знімає |
+| 6 | Блокування | 3 невірні коди | «Забагато спроб»; знімає «Огляд» → «Розблокувати» або `bin/unlock.php` |
 | 7 | Відкликання | «Відкликати доступ» | запис зник, L2TP-сесія розірвана |
 | 8 | Журнал | панель → Журнали; `tail /var/lib/vpn-gw/logs/audit.log`; SIEM | JSON-події з `app_version` і `category`, без паролів і кодів |
 | 9 | Користувач поза групою | тестовий обліковий запис без `VPN-Users` | «Невірні облікові дані», у журналі `reason: not_allowed` |

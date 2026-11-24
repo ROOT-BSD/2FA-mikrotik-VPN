@@ -17,7 +17,7 @@ final class RouterOsFactory
     {
         $clients = [];
         $pinned = $cfg->sshHostKeys();
-        foreach ($cfg->routers() as $r) {
+        foreach ($cfg->activeRouters() as $r) {
             $c = $cfg->routerCredentials($r);
             if ($r['transport'] === 'ssh') {
                 $clients[] = SshClient::create($r['name'], $r['host'], $r['port'], $c['user'], $c['password'],

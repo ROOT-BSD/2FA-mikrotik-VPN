@@ -29,6 +29,11 @@ input.code { font-family: SFMono-Regular, Menlo, Consolas, "Liberation Mono", mo
 details > summary { cursor: pointer; }
 
 /* Маршрутизатори (панель → MikroTik): картка на кожен маршрутизатор, таблиця підключених */
+.router-card.router-on { background: #eaf7ee; border-color: #a3d9b1; }
+.router-card.router-on > .card-header { background: #d4efdc; border-color: #a3d9b1; }
+.router-card.router-off { background: #eceef0; border-color: #c4c8cc; color: #6c757d; }
+.router-card.router-off > .card-header { background: #dfe2e5; border-color: #c4c8cc; }
+.router-card.router-off .router-facts dd strong { color: #6c757d; }
 .router-card.border-dashed { border-style: dashed; background: transparent; }
 .router-card.border-dashed > .card-header { background: transparent; }
 .router-card input::placeholder { font-size: .85rem; }
@@ -53,3 +58,8 @@ details > summary { cursor: pointer; }
 .router-facts dd { margin-bottom: 0; }
 .router-facts dd.address-list strong { font-weight: 700; }
 .router-facts dd.host { overflow-wrap: anywhere; }
+
+/* «Огляд»: tiles are links */
+.tile-link .card { transition: border-color .15s, box-shadow .15s; }
+.tile-link:hover .card, .tile-link:focus-visible .card { border-color: var(--bs-primary); box-shadow: 0 .25rem .75rem rgba(13,110,253,.15) !important; }
+#grants { scroll-margin-top: 1rem; }

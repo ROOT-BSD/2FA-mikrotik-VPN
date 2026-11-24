@@ -115,6 +115,36 @@ final class EnrollEmailTest extends TestCase
         self::assertSame('application/pdf', $att[0][4]);
     }
 
+    /** 0.10.5: the external address (PORTAL_EXTERNAL_URL), if set, is the only portal address in the letters. */
+    public function testGuideLetterHasExternalAddress(): void
+    {
+        $this->boot(['SMTP_HOST' => 'mail.company.ua', 'SMTP_FROM' => 'vpn-gw@company.ua', 'USER_GUIDE_PDF' => $this->pdf,
+            'PORTAL_EXTERNAL_URL' => 'https://vpn-gw.nerc.gov.ua:11443/heou']);
+        $this->startEnrolment();
+        $this->request('POST', ['action' => 'confirm', 'code' => $this->code(), 'email' => 'ivan@company.ua']);
+        self::assertCount(1, $this->sent);
+        $body = $this->sent[0]->Body;
+        self::assertStringContainsString("Адреса порталу VPN-GW: https://vpn-gw.nerc.gov.ua:11443/heou\nЗбережіть адресу в закладках і не пересилайте стороннім.\n", $body);
+        self::assertStringNotContainsString('https://vpn-gw.company.ua/k7f3x/', $body, 'only the external address');
+        self::assertStringNotContainsString('Доступ ззовні', $body);
+    }
+
+    public function testAccessLetterHasExternalAddressOnlyWhenSet(): void
+    {
+        $until = new \DateTimeImmutable('2026-11-23 18:00:00');
+        foreach (['https://vpn-gw.nerc.gov.ua:11443/heou' => true, '' => false] as $url => $shown) {
+            $this->sent = [];
+            $cfg = TestConfig::make(['SMTP_HOST' => 'mail.company.ua', 'SMTP_FROM' => 'vpn-gw@company.ua', 'PORTAL_EXTERNAL_URL' => $url]);
+            $n = new Notifier($cfg, AuditLogger::null(), function (PHPMailer $m): void {
+                $this->sent[] = $m;
+            });
+            $n->accessGranted('ivanenko@company.ua', 'ivanenko', '198.51.100.7', $until);
+            self::assertCount(1, $this->sent);
+            self::assertSame($shown, str_contains($this->sent[0]->Body, 'Адреса порталу VPN-GW: https://vpn-gw.nerc.gov.ua:11443/heou'));
+            self::assertStringContainsString('відкрито VPN-доступ з IP 198.51.100.7', $this->sent[0]->Body);
+        }
+    }
+
     public function testBadAddressDoesNotUseUpTheCode(): void
     {
         $this->startEnrolment();

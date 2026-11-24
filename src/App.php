@@ -48,6 +48,7 @@ final class App
         // Admin panel: internal networks only (middleware below) + local administrator login.
         $app->get('/admin', fn ($rq, $rs) => $dashboard()->show($rq, $rs));
         $app->post('/admin/grants/revoke', fn ($rq, $rs) => $dashboard()->revoke($rq, $rs));
+        $app->post('/admin/lockouts/unlock', fn ($rq, $rs) => $dashboard()->unlock($rq, $rs));
         $app->get('/admin/authenticators', fn ($rq, $rs) => $authenticators()->show($rq, $rs));
         $app->post('/admin/authenticators/delete', fn ($rq, $rs) => $authenticators()->delete($rq, $rs));
         $app->get('/admin/login', fn ($rq, $rs) => $adminAuth()->form($rq, $rs));
@@ -58,6 +59,7 @@ final class App
         $app->map(['GET', 'POST'], '/admin/routers/edit/{name:[A-Za-z0-9_-]{1,32}}', fn ($rq, $rs, array $a) => $settings()->router($rq, $rs, (string) $a['name']));
         $app->map(['GET', 'POST'], '/admin/settings/{section:[a-z]+}', fn ($rq, $rs, array $a) => $settings()->handle($rq, $rs, (string) $a['section']));
         $app->get('/admin/logs', fn ($rq, $rs) => $logs()->show($rq, $rs));
+        $app->get('/admin/logs/download', fn ($rq, $rs) => $logs()->download($rq, $rs));
         $app->map(['GET', 'POST'], '/admin/backups', fn ($rq, $rs) => $maint()->backups($rq, $rs));
         $app->get('/admin/backups/{name:[A-Za-z0-9._-]+}', fn ($rq, $rs, array $a) => $maint()->download($rq, $rs, (string) $a['name']));
         $app->map(['GET', 'POST'], '/admin/update', fn ($rq, $rs) => $maint()->update($rq, $rs));

@@ -60,6 +60,9 @@ final class SettingsController extends AdminController
             if ($action === 'delete_router' && $section === 'mikrotik') {
                 return $this->deleteRouter($request, $response, $admin);
             }
+            if ($action === 'toggle_router' && $section === 'mikrotik') {
+                return $this->toggleRouter($request, $response, $admin);
+            }
             if (str_starts_with($action, 'reset:')) {
                 $key = substr($action, 6);
                 if (!in_array($key, array_column($schema['fields'], 'key'), true)) {
@@ -177,7 +180,7 @@ final class SettingsController extends AdminController
     }
 
     /**
-     * @param array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string}|null $current
+     * @param array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string, disabled: bool}|null $current
      * @param array<string, string> $posted
      */
     private function saveRouter(Request $request, Response $response, string $admin, ?array $current, array $posted): Response
@@ -185,12 +188,13 @@ final class SettingsController extends AdminController
         $rows = [];
         foreach ($this->cfg->routers() as $r) {
             $rows[] = $current !== null && $r['name'] === $current['name']
-                ? $posted + ['orig' => $r['name']]
+                ? array_merge($posted, ['orig' => $r['name'], 'disabled' => $r['disabled'] ? '1' : ''])
                 : ['name' => $r['name'], 'host' => $r['host'], 'version' => (string) $r['version'], 'port' => (string) $r['port'],
-                    'transport' => $r['transport'], 'user' => $r['user'], 'list' => $r['list'], 'orig' => $r['name']];
+                    'transport' => $r['transport'], 'user' => $r['user'], 'list' => $r['list'], 'orig' => $r['name'],
+                    'disabled' => $r['disabled'] ? '1' : ''];
         }
         if ($current === null) {
-            $rows[] = $posted + ['orig' => ''];
+            $rows[] = array_merge($posted, ['orig' => '', 'disabled' => '']);
         }
         $name = trim($posted['name'] ?? '');
         $changes = [];
@@ -226,12 +230,12 @@ final class SettingsController extends AdminController
     }
 
     /**
-     * @param array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string}|null $current
+     * @param array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string, disabled: bool}|null $current
      * @param array<string, mixed> $vars
      */
     private function routerPage(Response $response, ?array $current, array $vars = [], int $status = 200): Response
     {
-        $r = $current ?? ['name' => '', 'host' => '', 'version' => 7, 'port' => 0, 'transport' => 'api', 'user' => '', 'list' => ''];
+        $r = $current ?? ['name' => '', 'host' => '', 'version' => 7, 'port' => 0, 'transport' => 'api', 'user' => '', 'list' => '', 'disabled' => false];
         $posted = is_array($vars['posted'] ?? null) ? $vars['posted'] : [];
         $form = [
             'name' => $posted['name'] ?? $r['name'],
@@ -245,6 +249,7 @@ final class SettingsController extends AdminController
         unset($vars['posted']);
         return $this->page($response, 'admin_router', 'mikrotik', $vars + [
             'isNew' => $current === null,
+            'disabled' => $r['disabled'],
             'orig' => $r['name'],
             'router' => $form,
             'hostKey' => $current !== null ? ($this->cfg->sshHostKeys()[$current['name']] ?? null) : null,
@@ -273,6 +278,10 @@ final class SettingsController extends AdminController
         }
         if ($left === []) {
             $this->flash('Не можна видалити єдиний маршрутизатор: портал має працювати хоча б з одним. Спершу додайте інший.', 'error');
+            return $this->redirect($response, '/admin/settings/mikrotik');
+        }
+        if (array_filter($left, static fn (array $r): bool => !$r['disabled']) === []) {
+            $this->flash('Не можна видалити єдиний увімкнений маршрутизатор: портал має працювати хоча б з одним. Спершу увімкніть інший.', 'error');
             return $this->redirect($response, '/admin/settings/mikrotik');
         }
         $deleted = array_values(array_filter($routers, static fn (array $r): bool => $r['name'] === $name))[0];
@@ -309,8 +318,8 @@ final class SettingsController extends AdminController
     /**
      * A router as it is stored in ROUTERS (the form the panel saves).
      *
-     * @param array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string} $r
-     * @return array<string, int|string>
+     * @param array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string, disabled: bool} $r
+     * @return array<string, bool|int|string>
      */
     private static function exportRouter(array $r): array
     {
@@ -321,7 +330,52 @@ final class SettingsController extends AdminController
         if ($r['list'] !== '') {
             $out['list'] = $r['list'];
         }
+        if ($r['disabled']) {
+            $out['disabled'] = true;
+        }
         return $out;
+    }
+
+    /**
+     * «Відключити» / «Увімкнути» on a router card: marks the router "disabled" in ROUTERS or
+     * clears the mark. Nothing else changes — password, address-list and SSH host key stay, so
+     * turning it back on needs no re-entry. The last enabled router cannot be disabled.
+     */
+    private function toggleRouter(Request $request, Response $response, string $admin): Response
+    {
+        $name = $this->field($request, 'router', 32);
+        $target = null;
+        foreach ($this->cfg->routers() as $r) {
+            if ($r['name'] === $name) {
+                $target = $r;
+            }
+        }
+        if ($target === null) {
+            $this->flash('Такого маршрутизатора вже немає.', 'warning');
+            return $this->redirect($response, '/admin/settings/mikrotik');
+        }
+        $disable = !$target['disabled'];
+        $routers = array_map(static fn (array $r): array => $r['name'] === $name ? ['disabled' => $disable] + $r : $r, $this->cfg->routers());
+        if (array_filter($routers, static fn (array $r): bool => !$r['disabled']) === []) {
+            $this->flash('Не можна відключити єдиний увімкнений маршрутизатор: портал має працювати хоча б з одним.', 'error');
+            return $this->redirect($response, '/admin/settings/mikrotik');
+        }
+        $changes = ['ROUTERS' => json_encode(array_map(self::exportRouter(...), $routers), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)];
+        try {
+            $this->cfg->withPanelValues($changes);
+        } catch (ConfigException $e) {
+            $this->flash('Не змінено: ' . self::explain($e->getMessage()), 'error');
+            return $this->redirect($response, '/admin/settings/mikrotik');
+        }
+        $this->store->save($changes, $admin, $this->clock->now()->format('Y-m-d H:i:s'));
+        $host = $target['host'];
+        $this->audit->event($disable ? 'admin_router_disabled' : 'admin_router_enabled', $admin, $this->remote($request), [
+            'router' => $name, 'host' => $host,
+        ]);
+        $this->flash($disable
+            ? "Маршрутизатор «{$name}» ({$host}) відключено: портал тимчасово не додає на ньому адрес і не розриває сесій; усі налаштування збережено. Адреси, які портал уже додав, MikroTik видалить сам після тайм-ауту."
+            : "Маршрутизатор «{$name}» ({$host}) увімкнено: портал знову працює з ним.");
+        return $this->redirect($response, '/admin/settings/mikrotik');
     }
 
     /**
@@ -437,6 +491,9 @@ final class SettingsController extends AdminController
             if ($list !== '') {
                 $r['list'] = $list;
             }
+            if (($row['disabled'] ?? null) === '1') {
+                $r['disabled'] = true;
+            }
             $out[] = $r;
         }
         if (count($out) > self::MAX_ROUTERS) {
@@ -444,6 +501,9 @@ final class SettingsController extends AdminController
         }
         if (count(array_unique(array_column($out, 'name'))) !== count($out)) {
             throw new ConfigException('Назви маршрутизаторів мають бути унікальними');
+        }
+        if ($out !== [] && array_filter($out, static fn (array $r): bool => !isset($r['disabled'])) === []) {
+            throw new ConfigException('Має залишитися хоча б один увімкнений маршрутизатор');
         }
         return json_encode($out, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
     }

@@ -6,6 +6,7 @@
  * @var string $base
  * @var string $csrf
  * @var bool $isNew
+ * @var bool $disabled
  * @var string $orig
  * @var array{name: string, host: string, version: int, port: string, transport: string, user: string, list: string} $router
  * @var string|null $hostKey
@@ -40,7 +41,10 @@ if ($loaded) {
 $own = $router['list'];
 ?>
 <div class="mb-3"><a href="<?= $e($base) ?>/admin/settings/mikrotik" class="text-decoration-none">&larr; Підключення до MikroTik</a></div>
-<h3 class="mb-2"><?= $isNew ? 'Новий маршрутизатор' : 'Маршрутизатор ' . $e($orig) ?></h3>
+<h3 class="mb-2"><?= $isNew ? 'Новий маршрутизатор' : 'Маршрутизатор ' . $e($orig) ?><?= $disabled ? ' <span class="badge bg-secondary fs-6 align-middle">відключено</span>' : '' ?></h3>
+<?php if ($disabled): ?>
+<div class="alert alert-secondary py-2">Маршрутизатор відключено: портал з ним не працює (і «Отримати списки з MikroTik» його не опитує). Налаштування можна змінювати; увімкнути — кнопкою «Включити» на картці в «MikroTik».</div>
+<?php endif ?>
 <p class="text-muted">Параметри підключення порталу до цього маршрутизатора. Зберігаються зашифрованими; пароль у браузер не повертається.</p>
 <?php if ($error !== null): ?>
     <div class="alert alert-danger" role="alert">Не збережено: <?= $e($error) ?></div>

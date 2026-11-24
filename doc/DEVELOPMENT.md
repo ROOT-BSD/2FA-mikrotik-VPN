@@ -1,6 +1,6 @@
 # VPN-GW: посібник розробника
 
-**Версія документа 5.0 · 21.11.2026 · відповідає коду VPN-GW 0.10.3** · Супровідні документи: `INSTALL_GUIDE.md` (встановлення), `ADMIN_GUIDE.md` (панель адміністратора), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд), `CHANGELOG.md`
+**Версія документа 5.0 · 21.11.2026 · відповідає коду VPN-GW 0.10.9** · Супровідні документи: `INSTALL_GUIDE.md` (встановлення), `ADMIN_GUIDE.md` (панель адміністратора), `USER_GUIDE.md` (для співробітників), `VPN-GW_Як_це_працює.docx` (огляд), `CHANGELOG.md`
 
 Документ описує архітектуру і внутрішню будову реалізованого порталу: де що лежить, як працює кожен модуль, які рішення безпеки закладено і як вносити зміни. Код — у репозиторії; тут лише ключові фрагменти.
 
@@ -146,8 +146,9 @@ Webroot — лише `public/`. `src/`, `.env`, `vendor/`, `/var/lib/vpn-gw` з�
 | GET | `/admin/authenticators` (`q`) | Admin\Authenticators | зареєстровані автентифікатори (`Database::listTotp`, без секретів) |
 | POST | `/admin/authenticators/delete` | Admin\Authenticators | видалення прив'язки (`Database::deleteTotp`), подія `admin_totp_reset` |
 | POST | `/admin/grants/revoke` | Admin\Dashboard | «Відключити»: `AccessGranter::revoke` для активного доступу з таблиці `grants`, подія `admin_revoke` |
-| GET/POST | `/admin/settings/{mikrotik,mail,ad,logs,backup}` | Admin\Settings | `action=save` / `test` / `reset:KEY`; для mikrotik ще `lists` і `delete_router` (+ `router=<назва>`; окрема форма `#router-delete`, кнопки таблиці прив'язані атрибутом `form`) |
-| GET | `/admin/logs` | Admin\Logs | перегляд журналу (`q`, `level`, `category`) |
+| GET/POST | `/admin/settings/{mikrotik,mail,ad,logs,backup}` | Admin\Settings | `action=save` / `test` / `reset:KEY`; для mikrotik ще `lists`, `delete_router` і `toggle_router` (+ `router=<назва>`; окремі форми `#router-delete`, `#router-toggle`, кнопки прив'язані атрибутом `form`) |
+| GET | `/admin/logs` | Admin\Logs | перегляд журналу (`file` — назва файлу або `*` — усі файли, `q`, `level`, `category`) |
+| GET | `/admin/logs/download` | Admin\Logs | завантаження файлу журналу (`file` — назва зі списку) |
 | GET/POST | `/admin/backups`, GET `/admin/backups/{файл}` | Admin\Maintenance | список, «створити зараз», завантаження |
 | GET/POST | `/admin/update`, GET `/admin/jobs/{id}` | Admin\Maintenance | завантаження релізу, стан завдання |
 | GET/POST | `/admin/password` | Admin\Auth | зміна власного пароля |

@@ -18,7 +18,7 @@ use VpnGw\Storage\Database;
  * Sources, lowest to highest priority: built-in defaults -> .env -> values saved in
  * the admin panel (SQLite "settings" table, only keys from SettingsSchema).
  *
- * @phpstan-type RouterDef array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string}
+ * @phpstan-type RouterDef array{name: string, host: string, version: int, port: int, transport: string, user: string, list: string, disabled: bool}
  */
 final class Config
 {
@@ -40,6 +40,7 @@ final class Config
         'SMTP_CA_FILE' => '',
         'IT_CONTACT' => 'ІТ-служба',
         'USER_GUIDE_PDF' => '',
+        'PORTAL_EXTERNAL_URL' => '',
         'RATE_LOGIN_IP' => '5/900',
         'RATE_LOGIN_USER' => '3/900',
         'RATE_MFA_ATTEMPTS' => '3',
@@ -240,6 +241,10 @@ final class Config
         }
         foreach (['RATE_LOGIN_IP', 'RATE_LOGIN_USER', 'RATE_EMAIL_OTP'] as $k) {
             $this->rate($k);
+        }
+        $ext = trim($this->v['PORTAL_EXTERNAL_URL']);
+        if ($ext !== '' && preg_match(self::EXTERNAL_URL_RE, $ext) !== 1) {
+            throw new ConfigException('PORTAL_EXTERNAL_URL must look like https://vpn.company.ua:11443/path');
         }
         foreach (['LDAP_UPN_SUFFIX', 'LDAP_BASE_DN', 'LDAP_VPN_GROUP_DN', 'MT_USER', 'MT_SSH_USER', 'IT_CONTACT', 'SMTP_USER', 'SMTP_FROM'] as $k) {
             if (preg_match('/[\x00-\x1F\x7F]/', $this->v[$k]) === 1) {
@@ -449,10 +454,19 @@ final class Config
     public function routerLists(): array
     {
         $out = [];
-        foreach ($this->routers as $r) {
+        foreach ($this->activeRouters() as $r) {
             $out[$r['name']] = $this->routerList($r);
         }
         return $out;
+    }
+
+    /** https://host[:port][/path] — no user info, query, fragment, spaces or control characters. */
+    public const EXTERNAL_URL_RE = '#^https://[A-Za-z0-9.-]{1,253}(:\d{1,5})?(/[A-Za-z0-9._~%/-]*)?$#D';
+
+    /** Portal address for users outside the office, given in the e-mails; '' — not set. */
+    public function externalPortalUrl(): string
+    {
+        return trim($this->v['PORTAL_EXTERNAL_URL']);
     }
 
     /**
@@ -504,8 +518,15 @@ final class Config
             if (!is_string($list) || ($list !== '' && !preg_match('/^[A-Za-z0-9_.-]{1,64}$/', $list))) {
                 throw new ConfigException("ROUTERS[$i]: list may contain only letters, digits, _ . - (up to 64)");
             }
+            $disabled = $r['disabled'] ?? false;
+            if (!is_bool($disabled)) {
+                throw new ConfigException("ROUTERS[$i]: disabled must be true or false");
+            }
             $out[] = ['name' => $r['name'], 'host' => $r['host'], 'version' => $r['version'], 'port' => $r['port'],
-                'transport' => $r['transport'] ?? 'api', 'user' => $user, 'list' => $list];
+                'transport' => $r['transport'] ?? 'api', 'user' => $user, 'list' => $list, 'disabled' => $disabled];
+        }
+        if (array_filter($out, static fn (array $r): bool => !$r['disabled']) === []) {
+            throw new ConfigException('ROUTERS: at least one router must be enabled (all are "disabled": true)');
         }
         return $out;
     }
@@ -588,9 +609,24 @@ final class Config
         return $h * 3600 + $m * 60 + $s;
     }
 
-    /** @return list<RouterDef> */
+    /**
+     * All routers, including disabled ones (for the panel's router pages).
+     *
+     * @return list<RouterDef>
+     */
     public function routers(): array
     {
         return $this->routers;
+    }
+
+    /**
+     * Routers the portal works with: not marked "disabled". A disabled router keeps all its
+     * settings (password, address-list, SSH host key) but gets no addresses, revocations or checks.
+     *
+     * @return list<RouterDef>
+     */
+    public function activeRouters(): array
+    {
+        return array_values(array_filter($this->routers, static fn (array $r): bool => !$r['disabled']));
     }
 }

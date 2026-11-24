@@ -9,7 +9,8 @@
  * @var int $active
  * @var list<array{username: string, ip: string, granted_at: string, expires_at: string, revoked_at: string|null}> $grants
  * @var string $now
- * @var list<array{name: string, host: string, version: int, port: int, transport: string}> $routers
+ * @var list<array{key: string, until_ts: int, reason: string}> $lockouts
+ * @var list<array{name: string, host: string, version: int, port: int, transport: string, disabled: bool}> $routers
  * @var list<string> $ldapHosts
  * @var string $smtp
  * @var string $logPath
@@ -25,11 +26,12 @@ $stateBadge = ['queued' => 'bg-secondary', 'running' => 'bg-primary', 'ok' => 'b
 <?php foreach ($warnings as $w): ?>
     <div class="alert alert-warning"><?= $e($w) ?></div>
 <?php endforeach ?>
-<div class="row mb-4">
-    <div class="col-6 col-md-3 mb-3"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e($active) ?></h2><div class="text-muted">Активних доступів зараз</div></div></div>
-    <div class="col-6 col-md-3 mb-3"><a href="<?= $e($base) ?>/admin/authenticators" class="text-decoration-none text-reset"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e($enrolled) ?></h2><div class="text-muted">Зареєстрованих автентифікаторів</div></div></a></div>
-    <div class="col-6 col-md-3 mb-3"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e(count($routers)) ?></h2><div class="text-muted">Маршрутизаторів MikroTik</div></div></div>
-    <div class="col-6 col-md-3 mb-3"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e($version) ?></h2><div class="text-muted">Версія VPN-GW</div></div></div>
+<div class="row mb-4 tiles">
+<?php $off = count(array_filter($routers, static fn ($r) => $r['disabled'])); ?>
+    <div class="col-6 col-md-3 mb-3"><a href="#grants" class="tile-link d-block h-100 text-decoration-none text-reset" title="Останні видачі доступу"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e($active) ?></h2><div class="text-muted">Активних доступів зараз</div></div></a></div>
+    <div class="col-6 col-md-3 mb-3"><a href="<?= $e($base) ?>/admin/authenticators" class="tile-link d-block h-100 text-decoration-none text-reset" title="Зареєстровані автентифікатори"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e($enrolled) ?></h2><div class="text-muted">Зареєстрованих автентифікаторів</div></div></a></div>
+    <div class="col-6 col-md-3 mb-3"><a href="<?= $e($base) ?>/admin/settings/mikrotik" class="tile-link d-block h-100 text-decoration-none text-reset" title="Підключення до MikroTik"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e(count($routers) - $off) ?></h2><div class="text-muted">Маршрутизаторів MikroTik<?= $off > 0 ? '<br><span class="small">+ ' . $e($off) . ' відключено</span>' : '' ?></div></div></a></div>
+    <div class="col-6 col-md-3 mb-3"><a href="<?= $e($base) ?>/admin/update" class="tile-link d-block h-100 text-decoration-none text-reset" title="Оновлення"><div class="card text-center p-3 h-100 shadow-sm"><h2><?= $e($version) ?></h2><div class="text-muted">Версія VPN-GW</div></div></a></div>
 </div>
 
 <div class="row">
@@ -38,7 +40,7 @@ $stateBadge = ['queued' => 'bg-secondary', 'running' => 'bg-primary', 'ok' => 'b
             <div class="card-header">Підключення</div>
             <div class="card-body">
                 <table class="table table-sm mb-0">
-                    <tr><th class="label-col">MikroTik</th><td><?php foreach ($routers as $r): ?><?= $e($r['name']) ?> — <?= $e($r['host']) ?>:<?= $e($r['port']) ?> (v<?= $e($r['version']) ?>, <?= $r['transport'] === 'ssh' ? 'SSH' : 'API' ?>)<br><?php endforeach ?></td></tr>
+                    <tr><th class="label-col">MikroTik</th><td><?php foreach ($routers as $r): ?><?= $r['disabled'] ? '<span class="text-muted">' : '' ?><?= $e($r['name']) ?> — <?= $e($r['host']) ?>:<?= $e($r['port']) ?> (v<?= $e($r['version']) ?>, <?= $r['transport'] === 'ssh' ? 'SSH' : 'API' ?>)<?= $r['disabled'] ? ' — відключено</span>' : '' ?><br><?php endforeach ?></td></tr>
                     <tr><th>AD</th><td><?= $e(implode(', ', $ldapHosts)) ?></td></tr>
                     <tr><th>Пошта</th><td><?= $smtp === '' ? '<span class="text-muted">вимкнено</span>' : $e($smtp) ?></td></tr>
                     <tr><th>Журнал</th><td><code><?= $e($logPath) ?></code></td></tr>
@@ -62,7 +64,39 @@ $stateBadge = ['queued' => 'bg-secondary', 'running' => 'bg-primary', 'ok' => 'b
     </div>
 </div>
 
-<h5>Останні видачі доступу</h5>
+<h5>Активні блокування</h5>
+<p class="small text-muted mb-2">Логін або адреса блокуються після кількох невдалих спроб входу (порталу, реєстрації автентифікатора, коду, панелі) і розблоковуються самі після закінчення строку. «Розблокувати» знімає блокування одразу й обнуляє лічильник спроб.</p>
+<?php if ($lockouts === []): ?>
+    <p class="text-muted lockouts-empty">Немає.</p>
+<?php else:
+    $where = ['login' => 'вхід на портал', 'enroll' => 'реєстрація автентифікатора', 'mfa' => 'код підтвердження', 'admin' => 'вхід до панелі'];
+    $kind = ['ip' => 'IP-адреса', 'user' => 'Логін', 'admin-ip' => 'IP-адреса (панель)', 'admin-user' => 'Адміністратор'];
+?>
+<div class="table-responsive mb-4">
+    <table class="table table-bordered table-sm bg-white lockouts">
+        <thead><tr><th>Що заблоковано</th><th>Значення</th><th>Де</th><th>До</th><th></th></tr></thead>
+        <tbody>
+<?php foreach ($lockouts as $l): [$t, $v] = explode(':', $l['key'], 2) + [1 => '']; ?>
+            <tr>
+                <td><?= $e($kind[$t] ?? $t) ?></td>
+                <td><?= str_ends_with($t, 'ip') ? '<code>' . $e($v) . '</code>' : $e($v) ?></td>
+                <td><?= $e($where[$l['reason']] ?? $l['reason']) ?></td>
+                <td class="text-nowrap"><?= $e($dt($l['until_ts'])) ?></td>
+                <td class="text-end">
+                    <form method="post" action="<?= $e($base) ?>/admin/lockouts/unlock" class="m-0">
+                        <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
+                        <input type="hidden" name="key" value="<?= $e($l['key']) ?>">
+                        <button type="submit" class="btn btn-outline-primary btn-sm py-0">Розблокувати</button>
+                    </form>
+                </td>
+            </tr>
+<?php endforeach ?>
+        </tbody>
+    </table>
+</div>
+<?php endif ?>
+
+<h5 id="grants">Останні видачі доступу</h5>
 <p class="small text-muted mb-2">«Відключити» видаляє IP користувача з address-list усіх маршрутизаторів і розриває його VPN-сесію. Щоб знову підключитися, користувач має пройти портал ще раз.</p>
 <?php if ($grants === []): ?>
     <p class="text-muted">Ще не було.</p>

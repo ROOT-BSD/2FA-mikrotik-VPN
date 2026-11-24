@@ -862,6 +862,88 @@ final class AdminPanelTest extends TestCase
         self::assertSame(0, $this->db->countActiveGrants($now->format(DATE_ATOM)));
     }
 
+    /** 0.10.7: the dashboard tiles lead to their pages. */
+    public function testDashboardTilesAreLinks(): void
+    {
+        $this->login();
+        $html = self::body($this->request('GET', '/admin'));
+        foreach (['#grants', '/k7f3x/admin/authenticators', '/k7f3x/admin/settings/mikrotik', '/k7f3x/admin/update'] as $href) {
+            self::assertStringContainsString('<a href="' . $href . '" class="tile-link', $html, $href);
+        }
+        self::assertSame(4, substr_count($html, 'class="tile-link'));
+        self::assertStringContainsString('<h5 id="grants">Останні видачі доступу</h5>', $html);
+    }
+
+    /** 0.10.4: active lockouts on the dashboard with «Розблокувати». */
+    public function testActiveLockoutsAndUnlock(): void
+    {
+        $now = $this->clock->now()->getTimestamp();
+        $this->db->setLockout('user:ivanenko', $now + 600, 'enroll');
+        $this->db->addRateEvent('user:ivanenko', $now - 10);
+        $this->db->addRateEvent('mail:ivanenko', $now - 10);
+        $this->db->setLockout('ip:198.51.100.9', $now + 300, 'login');
+        $this->db->setLockout('user:<b>x', $now + 300, 'mfa');
+        $this->db->setLockout('user:expired', $now - 1, 'login');
+        $this->login();
+
+        $html = self::body($this->request('GET', '/admin'));
+        self::assertStringContainsString('Активні блокування', $html);
+        self::assertSame(3, substr_count($html, '>Розблокувати</button>'), 'expired lockouts are not listed');
+        self::assertStringContainsString('реєстрація автентифікатора', $html);
+        self::assertStringContainsString('<code>198.51.100.9</code>', $html);
+        self::assertStringContainsString(\VpnGw\Http\View::formatDate($now + 600), $html);
+        self::assertStringContainsString('&lt;b&gt;x', $html);
+        self::assertStringNotContainsString('<b>x', $html);
+        self::assertStringNotContainsString('expired', $html);
+
+        $r = $this->request('POST', '/admin/lockouts/unlock', ['key' => 'user:ivanenko']);
+        self::assertSame(303, $r->getStatusCode());
+        self::assertNull($this->db->lockoutUntil('user:ivanenko'));
+        self::assertSame(0, $this->db->countRateEvents('user:ivanenko', 0), 'attempt counter cleared');
+        self::assertSame(0, $this->db->countRateEvents('mail:ivanenko', 0));
+        self::assertNotNull($this->db->lockoutUntil('ip:198.51.100.9'), 'other lockouts stay');
+        $html = self::body($this->request('GET', '/admin'));
+        self::assertStringContainsString('Логін ivanenko розблоковано', $html);
+        self::assertSame(2, substr_count($html, '>Розблокувати</button>'));
+
+        // only a listed, still active lockout can be lifted
+        foreach (['user:ivanenko', 'user:expired', 'ip:203.0.113.1', ''] as $key) {
+            $this->request('POST', '/admin/lockouts/unlock', ['key' => $key]);
+            self::assertStringContainsString('вже не діє', self::body($this->request('GET', '/admin')));
+        }
+        self::assertNotNull($this->db->lockoutUntil('user:expired'));
+    }
+
+    public function testNoLockoutsAndUnlockNeedsLoginAndCsrf(): void
+    {
+        $this->db->setLockout('ip:198.51.100.9', $this->clock->now()->getTimestamp() + 300, 'login');
+        $r = $this->request('POST', '/admin/lockouts/unlock', ['key' => 'ip:198.51.100.9']);
+        self::assertSame('/k7f3x/admin/login', $r->getHeaderLine('Location'));
+        $this->login();
+        $r = $this->request('POST', '/admin/lockouts/unlock', ['key' => 'ip:198.51.100.9'], csrf: false);
+        self::assertContains($r->getStatusCode(), [400, 403]);
+        self::assertNotNull($this->db->lockoutUntil('ip:198.51.100.9'));
+        $this->db->deleteLockout('ip:198.51.100.9');
+        self::assertStringContainsString('lockouts-empty', self::body($this->request('GET', '/admin')));
+    }
+
+    public function testExternalPortalUrlIsValidated(): void
+    {
+        $this->login();
+        $form = [
+            'action' => 'save', 'SMTP_HOST' => 'smtp.company.ua', 'SMTP_PORT' => '587', 'SMTP_USER' => '', 'SMTP_PASS' => '',
+            'SMTP_FROM' => 'vpn-gw@company.ua', 'SMTP_CA_FILE' => '', 'EMAIL_OTP_ENABLED' => '0', 'IT_CONTACT' => 'ІТ',
+        ];
+        self::assertStringContainsString('name="PORTAL_EXTERNAL_URL"', self::body($this->request('GET', '/admin/settings/mail')));
+        foreach (['http://vpn-gw.company.ua/heou', 'https://user@vpn-gw.company.ua/', 'https://vpn-gw.company.ua/a?b=1', "https://vpn-gw.company.ua/\nx"] as $bad) {
+            $r = $this->request('POST', '/admin/settings/mail', $form + ['PORTAL_EXTERNAL_URL' => $bad]);
+            self::assertSame(422, $r->getStatusCode(), $bad);
+        }
+        $r = $this->request('POST', '/admin/settings/mail', $form + ['PORTAL_EXTERNAL_URL' => 'https://vpn-gw.nerc.gov.ua:11443/heou']);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        self::assertSame('https://vpn-gw.nerc.gov.ua:11443/heou', $this->settings()->values()['PORTAL_EXTERNAL_URL']);
+    }
+
     public function testDisconnectNeedsLoginAndCsrf(): void
     {
         $r = $this->request('POST', '/admin/grants/revoke', ['username' => 'ivanenko', 'ip' => '198.51.100.7']);
@@ -888,6 +970,139 @@ final class AdminPanelTest extends TestCase
         }
     }
 
+    /** 0.10.8: rotated log files (audit.log.1, audit.log.2.gz) can be chosen and downloaded. */
+    public function testRotatedLogFiles(): void
+    {
+        $dir = $this->tmp . '/logs';
+        @mkdir($dir, 0700, true);
+        $line = static fn (string $event, string $user, string $time): string => json_encode(['message' => $event, 'datetime' => $time, 'level_name' => 'INFO',
+            'context' => ['event' => $event, 'category' => 'auth', 'user' => $user, 'ip' => '198.51.100.7']]) . "\n";
+        file_put_contents("$dir/audit.log", $line('login_ok', 'today_user', '2026-11-24T06:15:00+02:00'));
+        file_put_contents("$dir/audit.log.1", $line('login_ok', 'yesterday_user', '2026-11-23T14:26:00+02:00'));
+        file_put_contents("$dir/audit.log.2.gz", gzencode($line('mfa_ok', 'older_user', '2026-11-22T14:16:00+02:00') . $line('login_fail', 'older<b>', '2026-11-22T14:17:00+02:00')));
+        file_put_contents("$dir/other.log", $line('login_ok', 'stranger', '2026-11-24T06:00:00+02:00'));
+        touch("$dir/audit.log.1", 1795962360);
+        touch("$dir/audit.log.2.gz", 1795875360);
+        $this->login();
+
+        $html = self::body($this->request('GET', '/admin/logs'));
+        self::assertStringContainsString('today_user', $html);
+        self::assertStringNotContainsString('yesterday_user', $html);
+        preg_match_all('/<option value="([^"]*)"[^>]*>(audit[^ <]*)/', $html, $m);
+        self::assertSame(['', 'audit.log.1', 'audit.log.2.gz'], $m[1], 'current first, then newest; other files not listed');
+        self::assertStringNotContainsString('other.log', $html);
+
+        $html = self::body($this->request('GET', '/admin/logs?file=audit.log.1'));
+        self::assertStringContainsString('yesterday_user', $html);
+        self::assertStringNotContainsString('today_user', $html);
+        self::assertStringContainsString('<option value="audit.log.1" selected>', $html);
+        self::assertStringContainsString('/logs/audit.log.1</code>', $html);
+
+        $html = self::body($this->request('GET', '/admin/logs?file=audit.log.2.gz&q=older'));
+        self::assertStringContainsString('older_user', $html, 'gzip-compressed copy is read');
+        self::assertStringContainsString('older&lt;b&gt;', $html);
+        self::assertSame(2, substr_count($html, '<td class="text-nowrap event">'));
+        $html = self::body($this->request('GET', '/admin/logs?file=audit.log.2.gz&category=auth&q=mfa_ok'));
+        self::assertSame(1, substr_count($html, '<td class="text-nowrap event">'));
+
+        // anything else falls back to the current log
+        foreach (['../../etc/passwd', 'other.log', '/etc/passwd', 'audit.log.9'] as $bad) {
+            $html = self::body($this->request('GET', '/admin/logs?file=' . rawurlencode($bad)));
+            self::assertStringContainsString('today_user', $html, $bad);
+            self::assertStringNotContainsString('stranger', $html);
+        }
+
+        $r = $this->request('GET', '/admin/logs/download?file=audit.log.2.gz');
+        self::assertSame(200, $r->getStatusCode());
+        self::assertSame('attachment; filename="audit.log.2.gz"', $r->getHeaderLine('Content-Disposition'));
+        self::assertSame('application/gzip', $r->getHeaderLine('Content-Type'));
+        self::assertStringContainsString('older_user', (string) gzdecode(self::body($r)));
+        $r = $this->request('GET', '/admin/logs/download');
+        self::assertSame('attachment; filename="audit.log"', $r->getHeaderLine('Content-Disposition'));
+        self::assertStringContainsString('today_user', self::body($r));
+        foreach (['../../etc/passwd', 'other.log', 'audit.log.9'] as $bad) {
+            self::assertSame(404, $this->request('GET', '/admin/logs/download?file=' . rawurlencode($bad))->getStatusCode(), $bad);
+        }
+    }
+
+    /** 0.10.9: «Показати всі» — entries from all log files together. */
+    public function testShowAllLogFiles(): void
+    {
+        $dir = $this->tmp . '/logs';
+        @mkdir($dir, 0700, true);
+        $line = static fn (string $event, string $user, string $time): string => json_encode(['message' => $event, 'datetime' => $time, 'level_name' => 'INFO',
+            'context' => ['event' => $event, 'category' => 'auth', 'user' => $user, 'ip' => '198.51.100.7']]) . "\n";
+        file_put_contents("$dir/audit.log", $line('login_ok', 'today_user', '2026-11-24T06:15:00+02:00'));
+        file_put_contents("$dir/audit.log.1", $line('login_ok', 'yesterday_user', '2026-11-23T14:26:00+02:00'));
+        file_put_contents("$dir/audit.log.2.gz", gzencode($line('mfa_ok', 'older_user', '2026-11-22T14:16:00+02:00')));
+        touch("$dir/audit.log.1", 1795962360);
+        touch("$dir/audit.log.2.gz", 1795875360);
+        $this->login();
+
+        $html = self::body($this->request('GET', '/admin/logs'));
+        self::assertStringContainsString('name="file" value="*" class="btn btn-outline-primary btn-sm show-all">Показати всі</button>', $html);
+        self::assertStringContainsString('<option value="*">— усі файли (3) —</option>', $html);
+
+        // the button's file=* comes after the select's value
+        $html = self::body($this->request('GET', '/admin/logs?file=audit.log.1&q=&level=&category=&file=%2A'));
+        self::assertStringContainsString('<option value="*" selected>', $html);
+        self::assertStringContainsString('Усі файли журналу: останні 3 записів', $html);
+        self::assertStringContainsString('<th>Файл</th>', $html);
+        $pos = array_map(static fn (string $u): int => (int) strpos($html, $u), ['today_user', 'yesterday_user', 'older_user']);
+        self::assertSame($pos, array_values(array_filter($pos)), 'all three found');
+        self::assertTrue($pos[0] < $pos[1] && $pos[1] < $pos[2], 'current file first, then newer rotated copies');
+        self::assertStringContainsString('<td class="text-nowrap small text-muted log-src">audit.log.2.gz</td>', $html);
+        self::assertStringNotContainsString('/admin/logs/download', $html, 'no single file to download');
+
+        $html = self::body($this->request('GET', '/admin/logs?file=%2A&q=older'));
+        self::assertStringContainsString('older_user', $html);
+        self::assertStringNotContainsString('today_user', $html);
+        self::assertSame(1, substr_count($html, '<td class="text-nowrap event">'));
+
+        $reader = new \VpnGw\Admin\LogReader("$dir/audit.log");
+        self::assertSame(['today_user', 'yesterday_user'], array_column($reader->tailAll(2), 'user'), 'stops at the limit');
+        self::assertSame(['audit.log', 'audit.log.1'], array_column($reader->tailAll(2), 'file'));
+    }
+
+    public function testShowAllDisabledWithOneFile(): void
+    {
+        @mkdir($this->tmp . '/logs', 0700, true);
+        file_put_contents($this->tmp . '/logs/audit.log', "{}\n");
+        $this->login();
+        $html = self::body($this->request('GET', '/admin/logs'));
+        self::assertStringContainsString('show-all" disabled', $html);
+        self::assertStringNotContainsString('усі файли (', $html);
+    }
+
+    public function testLogDownloadNeedsLogin(): void
+    {
+        @mkdir($this->tmp . '/logs', 0700, true);
+        file_put_contents($this->tmp . '/logs/audit.log', "{}\n");
+        $r = $this->request('GET', '/admin/logs/download');
+        self::assertSame('/k7f3x/admin/login', $r->getHeaderLine('Location'));
+    }
+
+    public function testGzipLogKeepsOnlyTheTail(): void
+    {
+        $dir = $this->tmp . '/logs';
+        @mkdir($dir, 0700, true);
+        $body = '';
+        for ($i = 0; $i < 500; $i++) {
+            $body .= json_encode(['message' => 'login_ok', 'datetime' => '2026-11-22T10:00:00+02:00', 'level_name' => 'INFO',
+                'context' => ['event' => 'login_ok', 'category' => 'auth', 'user' => "u$i", 'ip' => '198.51.100.7']]) . "\n";
+        }
+        file_put_contents("$dir/audit.log.3.gz", gzencode($body));
+        $reader = new \VpnGw\Admin\LogReader("$dir/audit.log");
+        $all = $reader->tail(1000, [], 8_388_608, 'audit.log.3.gz');
+        self::assertCount(500, $all);
+        self::assertSame('u499', $all[0]['user'], 'newest first');
+        $tail = $reader->tail(1000, [], 2000, 'audit.log.3.gz');
+        self::assertGreaterThan(0, count($tail));
+        self::assertLessThan(30, count($tail), 'only about maxBytes of the end');
+        self::assertSame('u499', $tail[0]['user']);
+        self::assertSame([], $reader->tail(10, [], 1000, 'nope.gz'));
+    }
+
     public function testLogEventIsPlainText(): void
     {
         @mkdir($this->tmp . '/logs', 0700, true);
@@ -898,6 +1113,99 @@ final class AdminPanelTest extends TestCase
         self::assertStringContainsString('<td class="text-nowrap event">login_fail</td>', $html);
         self::assertStringContainsString(\VpnGw\Http\View::formatDate('2026-11-22T09:06:47+02:00'), $html);
         self::assertStringNotContainsString('class="badge', preg_replace('/<nav.*?<\/nav>/s', '', $html) ?? '');
+    }
+
+    /** 0.10.6: «Відключити» / «Включити» / «Видалити» on a router card; grey and light-green cards. */
+    public function testRouterDisableEnable(): void
+    {
+        $this->login();
+        $form = $this->mikrotikForm();
+        $form['routers'][1] += ['transport' => 'api', 'user' => 'portal_branch', 'password' => 'Branch-Pass-1', 'list' => 'VPN_branch'];
+        self::assertSame(303, $this->request('POST', '/admin/settings/mikrotik', $form)->getStatusCode());
+        $this->boot();
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertSame(2, substr_count($html, 'router-card router-on'), 'both active: light green');
+        self::assertSame(2, substr_count($html, '>Відключити</button>'));
+        self::assertStringContainsString('form="router-toggle" name="router" value="branch"', $html);
+        self::assertStringContainsString('<form method="post" action="/k7f3x/admin/settings/mikrotik" id="router-toggle"', $html);
+        self::assertSame(2, substr_count($html, 'class="btn btn-outline-danger btn-sm ms-auto">Видалити</button>'), 'delete on each card');
+        $before = $this->settings()->values();
+
+        // disable branch: only the "disabled" mark changes
+        $r = $this->request('POST', '/admin/settings/mikrotik', ['action' => 'toggle_router', 'router' => 'branch']);
+        self::assertSame(303, $r->getStatusCode());
+        $v = $this->settings()->values();
+        $routers = json_decode($v['ROUTERS'], true);
+        self::assertTrue($routers[1]['disabled']);
+        self::assertEquals(['name' => 'branch', 'host' => '10.0.20.1', 'list' => 'VPN_branch', 'user' => 'portal_branch'],
+            array_intersect_key($routers[1], ['name' => 1, 'host' => 1, 'list' => 1, 'user' => 1]), 'settings kept');
+        self::assertArrayNotHasKey('disabled', $routers[0]);
+        self::assertSame($before['ROUTER_PASSWORDS'], $v['ROUTER_PASSWORDS'], 'own password kept');
+
+        $cfg = \VpnGw\Config::fromArray($this->cfgOverride + TestConfig::values(), $v);
+        self::assertSame(['core', 'branch'], array_column($cfg->routers(), 'name'));
+        self::assertSame(['core'], array_column($cfg->activeRouters(), 'name'), 'the portal works only with active ones');
+        self::assertSame(['core'], array_keys($cfg->routerLists()));
+        self::assertCount(1, \VpnGw\RouterOs\RouterOsFactory::fromConfig($cfg));
+
+        $this->boot();
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertStringContainsString('«branch» (10.0.20.1) відключено', $html);
+        self::assertSame(1, substr_count($html, 'router-card router-off'), 'disabled: grey');
+        self::assertSame(1, substr_count($html, 'router-card router-on'));
+        self::assertStringContainsString('value="branch" class="btn btn-outline-success btn-sm">Включити</button>', $html);
+        self::assertStringContainsString('disabled title="Єдиний увімкнений маршрутизатор відключити не можна">Відключити</button>', $html);
+        self::assertStringContainsString('<tr class="table-secondary text-muted">', $html);
+        $dash = self::body($this->request('GET', '/admin'));
+        self::assertStringContainsString('+ 1 відключено', $dash);
+        self::assertStringContainsString('10.0.20.1:', $dash);
+
+        // the last active one can be neither disabled nor deleted
+        foreach (['toggle_router', 'delete_router'] as $action) {
+            $this->request('POST', '/admin/settings/mikrotik', ['action' => $action, 'router' => 'core']);
+            self::assertSame($v['ROUTERS'], $this->settings()->values()['ROUTERS'], $action);
+        }
+        self::assertStringContainsString('єдиний увімкнений маршрутизатор', self::body($this->request('GET', '/admin/settings/mikrotik')));
+
+        // editing a disabled router keeps it disabled
+        $edit = self::body($this->request('GET', '/admin/routers/edit/branch'));
+        self::assertStringContainsString('Маршрутизатор відключено', $edit);
+        $r = $this->request('POST', '/admin/routers/edit/branch', ['action' => 'save', 'router' => [
+            'name' => 'branch', 'host' => '10.0.20.1', 'version' => '6', 'port' => '8729', 'transport' => 'api', 'user' => 'portal_branch', 'list' => 'VPN_branch2', 'disabled' => '',
+        ]]);
+        self::assertSame(303, $r->getStatusCode(), self::body($r));
+        $routers = json_decode($this->settings()->values()['ROUTERS'], true);
+        self::assertSame('VPN_branch2', $routers[1]['list']);
+        self::assertTrue($routers[1]['disabled']);
+
+        // enable again
+        $this->boot();
+        $this->request('POST', '/admin/settings/mikrotik', ['action' => 'toggle_router', 'router' => 'branch']);
+        $routers = json_decode($this->settings()->values()['ROUTERS'], true);
+        self::assertArrayNotHasKey('disabled', $routers[1]);
+        $this->boot();
+        $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
+        self::assertStringContainsString('«branch» (10.0.20.1) увімкнено', $html);
+        self::assertSame(2, substr_count($html, 'router-card router-on'));
+
+        // unknown router
+        $this->request('POST', '/admin/settings/mikrotik', ['action' => 'toggle_router', 'router' => 'nope']);
+        self::assertStringContainsString('Такого маршрутизатора вже немає', self::body($this->request('GET', '/admin/settings/mikrotik')));
+    }
+
+    public function testRoutersDisabledFlagValidation(): void
+    {
+        $base = $this->cfgOverride + TestConfig::values();
+        $one = '{"name":"core","host":"10.0.10.1","version":7,"port":443,"transport":"api"';
+        self::assertFalse(\VpnGw\Config::fromArray(['ROUTERS' => "[$one}]"] + $base)->routers()[0]['disabled']);
+        foreach (["[$one,\"disabled\":true}]" => 'at least one router must be enabled', "[$one,\"disabled\":\"yes\"}]" => 'disabled must be true or false'] as $json => $msg) {
+            try {
+                \VpnGw\Config::fromArray(['ROUTERS' => $json] + $base)->validate();
+                self::fail($json);
+            } catch (\VpnGw\ConfigException $e) {
+                self::assertStringContainsString($msg, $e->getMessage());
+            }
+        }
     }
 
     /** 0.8.2: a card per router; routers are deleted from the table under the cards. */
@@ -930,7 +1238,7 @@ final class AdminPanelTest extends TestCase
         $this->boot();
         $html = self::body($this->request('GET', '/admin/settings/mikrotik'));
         self::assertStringContainsString('«branch» (10.0.20.1) видалено', $html);
-        self::assertStringContainsString('disabled title="Єдиний маршрутизатор видалити не можна"', $html);
+        self::assertStringContainsString('disabled title="Єдиний увімкнений маршрутизатор видалити не можна"', $html);
 
         // the last one stays
         $r = $this->request('POST', '/admin/settings/mikrotik', ['action' => 'delete_router', 'router' => 'core']);

@@ -210,6 +210,21 @@ final class Database
         return $st->rowCount() > 0;
     }
 
+    /**
+     * Lockouts still in force, the latest-ending first.
+     * @return list<array{key: string, until_ts: int, reason: string}>
+     */
+    public function activeLockouts(int $nowTs): array
+    {
+        $st = $this->pdo->prepare('SELECT key, until_ts, reason FROM lockouts WHERE until_ts > ? ORDER BY until_ts DESC, key');
+        $st->execute([$nowTs]);
+        $out = [];
+        foreach ($st->fetchAll(\PDO::FETCH_ASSOC) as $r) {
+            $out[] = ['key' => (string) $r['key'], 'until_ts' => (int) $r['until_ts'], 'reason' => (string) $r['reason']];
+        }
+        return $out;
+    }
+
     /** Removes stale rate events (older than 24h) and expired lockouts. */
     public function cleanup(int $nowTs): void
     {
